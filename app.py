@@ -895,10 +895,19 @@ if __name__ == "__main__":
     print(f"Hardware mode: {hardware.mode}")
     print(f"Scheduler: {'RUNNING' if reminder_scheduler.running else 'STOPPED'}")
     print(f"Active profile: {profile()['display_name'] or profile()['participant_id']}")
-    print(
-        "Companion AI: "
-        + (f"OPENAI ({ai_status_line['model']})" if ai_status_line["api_available"] else "BASIC FALLBACK")
-    )
+    if ai_status_line["api_available"]:
+        provider = (
+            ai_status_line.get("provider")
+            or ai_status_line.get("mode")
+            or "cloud"
+        ).upper()
+
+        print(
+            f"Companion AI: {provider} "
+            f"({ai_status_line['model']})"
+        )
+    else:
+        print("Companion AI: BASIC FALLBACK")
     print(f"Timezone: {local_timezone}\n")
     app.run(
         host=config.HOST,

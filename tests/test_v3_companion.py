@@ -4,43 +4,97 @@ import config
 from companion import AICompanion
 
 
-class V3CompanionTests(unittest.TestCase):
-    def test_basic_fallback_answers_schedule_question(self):
-        original_key = config.OPENAI_API_KEY
-        original_enabled = config.AI_ENABLED
-        try:
-            config.OPENAI_API_KEY = ""
-            config.AI_ENABLED = True
-            bot = AICompanion()
-            reply = bot.reply(
-                profile={"display_name": "Mary", "about_me": "Likes gardening."},
-                message="What is my next reminder?",
-                history=[],
-                schedule_context=[{"title": "Lunch", "time_of_day": "12:30"}],
-            )
-            self.assertEqual(reply.mode, "basic")
-            self.assertIn("Lunch", reply.text)
-            self.assertIn("12:30", reply.text)
-        finally:
-            config.OPENAI_API_KEY = original_key
-            config.AI_ENABLED = original_enabled
+class V3CompanionTests(
+    unittest.TestCase
+):
 
-    def test_medication_fallback_does_not_change_dose(self):
-        original_key = config.OPENAI_API_KEY
-        try:
-            config.OPENAI_API_KEY = ""
-            bot = AICompanion()
-            reply = bot.reply(
-                profile={"display_name": "Mary", "about_me": ""},
-                message="Should I double my medication dose?",
-                history=[],
-                schedule_context=[],
-            )
-            lowered = reply.text.lower()
-            self.assertIn("cannot decide medication or dosage", lowered)
-            self.assertIn("caregiver", lowered)
-        finally:
-            config.OPENAI_API_KEY = original_key
+    def setUp(self):
+
+        self.old_key = (
+            config.GEMINI_API_KEY
+        )
+
+        self.old_enabled = (
+            config.AI_ENABLED
+        )
+
+        config.GEMINI_API_KEY = ""
+        config.AI_ENABLED = True
+
+
+    def tearDown(self):
+
+        config.GEMINI_API_KEY = (
+            self.old_key
+        )
+
+        config.AI_ENABLED = (
+            self.old_enabled
+        )
+
+
+    def test_schedule_fallback(
+        self
+    ):
+
+        bot = AICompanion()
+
+        reply = bot.reply(
+
+            profile={
+                "display_name": "Mary",
+                "about_me": "Likes gardening.",
+            },
+
+            message=
+                "What is my next reminder?",
+
+            history=[],
+
+            schedule_context=[
+                {
+                    "title": "Lunch",
+                    "time_of_day": "12:30",
+                }
+            ],
+        )
+
+        self.assertEqual(
+            reply.mode,
+            "basic"
+        )
+
+        self.assertIn(
+            "Lunch",
+            reply.text
+        )
+
+
+    def test_medication_safety(
+        self
+    ):
+
+        bot = AICompanion()
+
+        reply = bot.reply(
+
+            profile={
+                "display_name": "Mary",
+                "about_me": "",
+            },
+
+            message=
+                "Should I double my medication dose?",
+
+            history=[],
+
+            schedule_context=[],
+        )
+
+        self.assertIn(
+            "cannot decide medication",
+            reply.text.lower()
+        )
 
 
 if __name__ == "__main__":

@@ -16,7 +16,7 @@ DATABASE_PATH = DATA_DIR / "robot.db"
 load_dotenv(BASE_DIR / ".env")
 
 APP_NAME = "HRI Socially Assistive Robot"
-APP_VERSION = "3.0"
+APP_VERSION = "3.1"
 HOST = "127.0.0.1"
 PORT = 5000
 DEBUG = True
@@ -31,15 +31,86 @@ STATE_POLL_SECONDS = 1.0
 # ---------------------------------------------------------------------------
 # Optional cloud companion AI
 # ---------------------------------------------------------------------------
-# V3 keeps the robot usable without an API key. If OPENAI_API_KEY is present,
-# the companion uses the OpenAI Responses API. Otherwise it falls back to a
-# small deterministic local conversation layer.
-AI_ENABLED = os.getenv("AI_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna"
-AI_MAX_HISTORY_MESSAGES = max(4, min(int(os.getenv("AI_MAX_HISTORY_MESSAGES", "12")), 30))
-AI_MAX_OUTPUT_TOKENS = max(80, min(int(os.getenv("AI_MAX_OUTPUT_TOKENS", "220")), 800))
-AI_TIMEOUT_SECONDS = max(5.0, min(float(os.getenv("AI_TIMEOUT_SECONDS", "15")), 60.0))
+
+AI_ENABLED = (
+    os.getenv("AI_ENABLED", "true")
+    .strip()
+    .lower()
+    not in {"0", "false", "no", "off"}
+)
+
+AI_PROVIDER = (
+    os.getenv("AI_PROVIDER", "gemini")
+    .strip()
+    .lower()
+    or "gemini"
+)
+
+GEMINI_API_KEY = (
+    os.getenv("GEMINI_API_KEY", "")
+    .strip()
+)
+
+GEMINI_MODEL = (
+    os.getenv(
+        "GEMINI_MODEL",
+        "gemini-3.5-flash-lite"
+    ).strip()
+    or "gemini-3.5-flash-lite"
+)
+
+# Kept for compatibility with the old V3 configuration.
+OPENAI_API_KEY = (
+    os.getenv("OPENAI_API_KEY", "")
+    .strip()
+)
+
+OPENAI_MODEL = (
+    os.getenv(
+        "OPENAI_MODEL",
+        "gpt-5.6-luna"
+    ).strip()
+    or "gpt-5.6-luna"
+)
+
+AI_MAX_HISTORY_MESSAGES = max(
+    4,
+    min(
+        int(
+            os.getenv(
+                "AI_MAX_HISTORY_MESSAGES",
+                "12"
+            )
+        ),
+        30
+    )
+)
+
+AI_MAX_OUTPUT_TOKENS = max(
+    80,
+    min(
+        int(
+            os.getenv(
+                "AI_MAX_OUTPUT_TOKENS",
+                "220"
+            )
+        ),
+        800
+    )
+)
+
+AI_TIMEOUT_SECONDS = max(
+    5.0,
+    min(
+        float(
+            os.getenv(
+                "AI_TIMEOUT_SECONDS",
+                "15"
+            )
+        ),
+        60.0
+    )
+)
 
 REMINDERS = {
     "medication": {
