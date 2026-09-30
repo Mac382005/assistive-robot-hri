@@ -11,6 +11,7 @@ from flask import Flask, Response, jsonify, render_template, request
 from tzlocal import get_localzone
 
 import config
+from companion import AICompanion
 from database import RobotDatabase
 from experiment.conditions import CONDITIONS, get_condition
 from experiment.response_timer import ResponseTimer
@@ -26,6 +27,7 @@ database.initialise()
 database.seed_schedules_if_needed(config.SYNTHETIC_SCHEDULE)
 response_timer = ResponseTimer()
 hardware = MockHardwareController()
+companion_ai = AICompanion()
 state_lock = threading.RLock()
 
 robot_state = {
@@ -64,15 +66,71 @@ def clean_days(value: object) -> list[int]:
 
 
 def profile() -> dict:
-    settings = database.get_settings()
-    condition = settings.get("default_condition", config.DEFAULT_CONDITION).upper()
+    active = database.get_active_profile()
+    condition = str(active.get("default_condition") or config.DEFAULT_CONDITION).upper()
     if condition not in CONDITIONS:
         condition = config.DEFAULT_CONDITION
     return {
-        "participant_id": settings.get("participant_id", config.DEFAULT_PARTICIPANT_ID),
-        "display_name": settings.get("display_name", config.DEFAULT_DISPLAY_NAME),
+        "id": int(active["id"]),
+        "participant_id": active.get("participant_id", config.DEFAULT_PARTICIPANT_ID),
+        "display_name": active.get("display_name", config.DEFAULT_DISPLAY_NAME),
         "default_condition": condition,
+        "about_me": active.get("about_me", ""),
     }
+
+
+def profile_payload(payload: dict, *, fallback: dict | None = None) -> dict:
+    fallback = fallback or {}
+    participant_id = clean_text(
+        payload.get("participant_id"),
+        fallback=fallback.get("participant_id", config.DEFAULT_PARTICIPANT_ID),
+        max_length=30,
+    )
+    if not participant_id:
+        raise ValueError("Participant / User ID is required.")
+    display_name = clean_text(
+        payload.get("display_name"),
+        fallback=fallback.get("display_name", ""),
+        max_length=40,
+    )
+    condition = clean_text(
+        payload.get("default_condition"),
+        fallback=fallback.get("default_condition", config.DEFAULT_CONDITION),
+        max_length=20,
+    ).upper()
+    get_condition(condition)
+    about_me = clean_text(
+        payload.get("about_me"),
+        fallback=fallback.get("about_me", ""),
+        max_length=500,
+    )
+    return {
+        "participant_id": participant_id,
+        "display_name": display_name,
+        "default_condition": condition,
+        "about_me": about_me,
+    }
+
+
+def seed_demo_profiles_if_needed() -> None:
+    settings = database.get_settings()
+    if settings.get("v3_demo_profiles_seeded") == "1":
+        return
+    existing = {item["participant_id"] for item in database.list_profiles()}
+    for demo in config.DEMO_PROFILES:
+        if demo["participant_id"] in existing:
+            continue
+        profile_id = database.create_profile(
+            participant_id=demo["participant_id"],
+            display_name=demo["display_name"],
+            default_condition=demo["default_condition"],
+            about_me=demo.get("about_me", ""),
+        )
+        database.replace_schedules(demo.get("schedule", []), profile_id=profile_id)
+    database.set_settings({"v3_demo_profiles_seeded": "1"})
+
+
+seed_demo_profiles_if_needed()
 
 
 def touch_state() -> None:
@@ -105,6 +163,7 @@ def start_reminder_core(
     message: str | None = None,
     source: str = "manual",
     schedule_id: int | None = None,
+    profile_id: int | None = None,
 ) -> tuple[dict | None, str | None]:
     reminder_type = reminder_type.lower()
     if reminder_type not in config.REMINDERS:
@@ -118,6 +177,7 @@ def start_reminder_core(
     base = config.REMINDERS[reminder_type]
     display_title = clean_text(title, fallback=base["title"], max_length=80)
     display_message = clean_text(message, fallback=base["message"], max_length=240)
+    profile_id = int(profile_id or database.get_active_profile_id())
 
     with state_lock:
         if robot_state["mode"] == "reminder":
@@ -135,6 +195,7 @@ def start_reminder_core(
             voice_message = f"{greeting} {base['voice_message']}".strip()
 
         active = {
+            "profile_id": profile_id,
             "participant_id": participant_id,
             "display_name": display_name,
             "reminder_type": reminder_type,
@@ -161,15 +222,16 @@ def start_reminder_core(
 
 def on_scheduled_reminder_due(schedule: dict, source: str) -> None:
     user = profile()
+    schedule_profile_id = int(schedule.get("profile_id") or user["id"])
+    if schedule_profile_id != user["id"]:
+        print("[SCHEDULER] Reminder skipped because its profile is not active.")
+        return
+
     participant_id = clean_text(
-        schedule.get("participant_id"),
-        fallback=user["participant_id"],
-        max_length=30,
+        schedule.get("participant_id"), fallback=user["participant_id"], max_length=30
     )
     display_name = clean_text(
-        schedule.get("display_name"),
-        fallback=user["display_name"],
-        max_length=40,
+        schedule.get("display_name"), fallback=user["display_name"], max_length=40
     )
     state, error = start_reminder_core(
         reminder_type=schedule.get("reminder_type", "appointment"),
@@ -180,6 +242,7 @@ def on_scheduled_reminder_due(schedule: dict, source: str) -> None:
         message=schedule.get("message"),
         source=source,
         schedule_id=schedule.get("id"),
+        profile_id=schedule_profile_id,
     )
     if error:
         print(f"[SCHEDULER] Reminder skipped: {error}")
@@ -187,12 +250,18 @@ def on_scheduled_reminder_due(schedule: dict, source: str) -> None:
         print(f"[SCHEDULER] Activated: {schedule.get('title', 'Reminder')}")
 
 
-reminder_scheduler = ReminderScheduler(database, on_scheduled_reminder_due)
+reminder_scheduler = ReminderScheduler(
+    database,
+    on_scheduled_reminder_due,
+    active_profile_id=database.get_active_profile_id,
+)
 atexit.register(reminder_scheduler.shutdown)
 
 
 def schedule_payload_from_request(payload: dict) -> dict:
-    reminder_type = clean_text(payload.get("reminder_type"), fallback="medication", max_length=30).lower()
+    reminder_type = clean_text(
+        payload.get("reminder_type"), fallback="medication", max_length=30
+    ).lower()
     if reminder_type not in config.REMINDERS:
         raise ValueError("Unknown reminder type.")
     condition_name = clean_text(
@@ -215,8 +284,9 @@ def schedule_payload_from_request(payload: dict) -> dict:
 
 
 def schedules_with_runtime() -> list[dict]:
+    active_profile_id = database.get_active_profile_id()
     next_runs = reminder_scheduler.next_run_map()
-    rows = database.list_schedules()
+    rows = database.list_schedules(profile_id=active_profile_id)
     for row in rows:
         row["next_run_time"] = next_runs.get(row["id"])
     return rows
@@ -248,6 +318,30 @@ def next_occurrence() -> dict | None:
     return row
 
 
+def upcoming_schedule_context(limit: int = 4) -> list[dict]:
+    rows = schedules_with_runtime()
+    active = [item for item in rows if item.get("enabled")]
+    active.sort(key=lambda item: (item.get("next_run_time") or "9999", item["time_of_day"]))
+    if not any(item.get("next_run_time") for item in active):
+        now = datetime.now(local_timezone)
+        today = [
+            item
+            for item in active
+            if now.weekday() in item["days_of_week"]
+            and tuple(int(part) for part in item["time_of_day"].split(":")) >= (now.hour, now.minute)
+        ]
+        if today:
+            active = today
+    return [
+        {
+            "title": item["title"],
+            "time_of_day": item["time_of_day"],
+            "reminder_type": item["reminder_type"],
+        }
+        for item in active[:limit]
+    ]
+
+
 @app.get("/")
 def index():
     return render_template(
@@ -270,6 +364,8 @@ def health():
             "hardware_mode": hardware.mode,
             "scheduler_running": reminder_scheduler.running,
             "timezone": str(local_timezone),
+            "active_profile": profile(),
+            "companion_ai": companion_ai.status(),
         }
     )
 
@@ -288,6 +384,7 @@ def public_config():
             "reminders": config.REMINDERS,
             "hardware_mode": hardware.mode,
             "timezone": str(local_timezone),
+            "companion_ai": companion_ai.status(),
         }
     )
 
@@ -297,6 +394,10 @@ def get_state():
     return jsonify(state_snapshot())
 
 
+# ---------------------------------------------------------------------------
+# Profiles
+# ---------------------------------------------------------------------------
+
 @app.get("/api/profile")
 def get_profile():
     return jsonify(profile())
@@ -304,27 +405,88 @@ def get_profile():
 
 @app.put("/api/profile")
 def update_profile():
+    active = profile()
     payload = request.get_json(silent=True) or {}
-    participant_id = clean_text(
-        payload.get("participant_id"), fallback=config.DEFAULT_PARTICIPANT_ID, max_length=30
-    )
-    display_name = clean_text(payload.get("display_name"), max_length=40)
-    condition = clean_text(
-        payload.get("default_condition"), fallback=config.DEFAULT_CONDITION, max_length=20
-    ).upper()
     try:
-        get_condition(condition)
+        values = profile_payload(payload, fallback=active)
+        database.update_profile(active["id"], **values)
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
-    database.set_settings(
-        {
-            "participant_id": participant_id,
-            "display_name": display_name,
-            "default_condition": condition,
-        }
-    )
     return jsonify(profile())
 
+
+@app.get("/api/profiles")
+def get_profiles():
+    return jsonify(
+        {
+            "active_profile_id": database.get_active_profile_id(),
+            "profiles": database.list_profiles(),
+        }
+    )
+
+
+@app.post("/api/profiles")
+def create_profile_route():
+    payload = request.get_json(silent=True) or {}
+    try:
+        values = profile_payload(payload)
+        profile_id = database.create_profile(**values)
+        if bool(payload.get("copy_demo_schedule", True)):
+            database.replace_schedules(config.SYNTHETIC_SCHEDULE, profile_id=profile_id)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(database.get_profile(profile_id)), 201
+
+
+@app.put("/api/profiles/<int:profile_id>")
+def update_profile_route(profile_id: int):
+    current = database.get_profile(profile_id)
+    if not current:
+        return jsonify({"error": "Profile not found."}), 404
+    payload = request.get_json(silent=True) or {}
+    try:
+        values = profile_payload(payload, fallback=current)
+        database.update_profile(profile_id, **values)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(database.get_profile(profile_id))
+
+
+@app.post("/api/profiles/<int:profile_id>/activate")
+def activate_profile(profile_id: int):
+    with state_lock:
+        if robot_state["mode"] == "reminder":
+            return jsonify({"error": "Finish or snooze the active reminder before switching profile."}), 409
+    try:
+        active = database.set_active_profile(profile_id)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+    reminder_scheduler.reload()
+    with state_lock:
+        response_timer.reset()
+        robot_state["mode"] = "idle"
+        robot_state["active_reminder"] = None
+        robot_state["last_result"] = None
+        touch_state()
+    return jsonify({"active_profile": active, "profile": profile()})
+
+
+@app.delete("/api/profiles/<int:profile_id>")
+def delete_profile_route(profile_id: int):
+    with state_lock:
+        if robot_state["mode"] == "reminder":
+            return jsonify({"error": "Finish or snooze the active reminder before deleting a profile."}), 409
+    try:
+        active_profile_id = database.delete_profile(profile_id)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    reminder_scheduler.reload()
+    return jsonify({"ok": True, "active_profile_id": active_profile_id, "profile": profile()})
+
+
+# ---------------------------------------------------------------------------
+# Reminder interactions
+# ---------------------------------------------------------------------------
 
 @app.post("/api/reminder/start")
 def start_reminder():
@@ -336,7 +498,9 @@ def start_reminder():
     display_name = clean_text(
         payload.get("display_name"), fallback=user["display_name"], max_length=40
     )
-    reminder_type = clean_text(payload.get("reminder_type"), fallback="medication", max_length=30).lower()
+    reminder_type = clean_text(
+        payload.get("reminder_type"), fallback="medication", max_length=30
+    ).lower()
     condition_name = clean_text(
         payload.get("condition"), fallback=user["default_condition"], max_length=20
     ).upper()
@@ -347,6 +511,7 @@ def start_reminder():
         participant_id=participant_id,
         display_name=display_name,
         source="manual",
+        profile_id=user["id"],
     )
     if error:
         status = 409 if "already active" in error else 400
@@ -368,6 +533,7 @@ def acknowledge_reminder():
 
         condition = get_condition(active["condition"]["name"])
         trial_id = database.save_trial(
+            profile_id=active.get("profile_id"),
             participant_id=active["participant_id"],
             display_name=active["display_name"],
             reminder_type=active["reminder_type"],
@@ -420,6 +586,7 @@ def snooze_reminder():
 
         condition = get_condition(active["condition"]["name"])
         trial_id = database.save_trial(
+            profile_id=active.get("profile_id"),
             participant_id=active["participant_id"],
             display_name=active["display_name"],
             reminder_type=active["reminder_type"],
@@ -466,9 +633,19 @@ def reset_reminder():
     return jsonify(snapshot)
 
 
+# ---------------------------------------------------------------------------
+# Per-profile schedules
+# ---------------------------------------------------------------------------
+
 @app.get("/api/schedules")
 def get_schedules():
-    return jsonify({"schedules": schedules_with_runtime(), "timezone": str(local_timezone)})
+    return jsonify(
+        {
+            "profile_id": database.get_active_profile_id(),
+            "schedules": schedules_with_runtime(),
+            "timezone": str(local_timezone),
+        }
+    )
 
 
 @app.post("/api/schedules")
@@ -478,37 +655,49 @@ def create_schedule():
         values = schedule_payload_from_request(payload)
     except (ValueError, TypeError) as exc:
         return jsonify({"error": str(exc)}), 400
-    schedule_id = database.create_schedule(**values)
+    profile_id = database.get_active_profile_id()
+    schedule_id = database.create_schedule(profile_id=profile_id, **values)
     reminder_scheduler.reload()
     return jsonify(database.get_schedule(schedule_id)), 201
 
 
+def _active_owned_schedule(schedule_id: int) -> dict | None:
+    row = database.get_schedule(schedule_id)
+    if not row:
+        return None
+    if int(row.get("profile_id") or 0) != database.get_active_profile_id():
+        return None
+    return row
+
+
 @app.put("/api/schedules/<int:schedule_id>")
 def update_schedule(schedule_id: int):
+    if not _active_owned_schedule(schedule_id):
+        return jsonify({"error": "Schedule not found for the active profile."}), 404
     payload = request.get_json(silent=True) or {}
     try:
         values = schedule_payload_from_request(payload)
     except (ValueError, TypeError) as exc:
         return jsonify({"error": str(exc)}), 400
-    if not database.update_schedule(schedule_id, **values):
-        return jsonify({"error": "Schedule not found."}), 404
+    database.update_schedule(schedule_id, **values)
     reminder_scheduler.reload()
     return jsonify(database.get_schedule(schedule_id))
 
 
 @app.delete("/api/schedules/<int:schedule_id>")
 def delete_schedule(schedule_id: int):
-    if not database.delete_schedule(schedule_id):
-        return jsonify({"error": "Schedule not found."}), 404
+    if not _active_owned_schedule(schedule_id):
+        return jsonify({"error": "Schedule not found for the active profile."}), 404
+    database.delete_schedule(schedule_id)
     reminder_scheduler.reload()
     return jsonify({"ok": True})
 
 
 @app.post("/api/schedules/<int:schedule_id>/trigger")
 def trigger_schedule_now(schedule_id: int):
-    schedule = database.get_schedule(schedule_id)
+    schedule = _active_owned_schedule(schedule_id)
     if not schedule:
-        return jsonify({"error": "Schedule not found."}), 404
+        return jsonify({"error": "Schedule not found for the active profile."}), 404
     user = profile()
     state, error = start_reminder_core(
         reminder_type=schedule["reminder_type"],
@@ -519,6 +708,7 @@ def trigger_schedule_now(schedule_id: int):
         message=schedule["message"],
         source="schedule_test",
         schedule_id=schedule_id,
+        profile_id=user["id"],
     )
     if error:
         return jsonify({"error": error}), 409
@@ -527,7 +717,8 @@ def trigger_schedule_now(schedule_id: int):
 
 @app.post("/api/schedules/reset-demo")
 def reset_demo_schedule():
-    database.replace_schedules(config.SYNTHETIC_SCHEDULE)
+    profile_id = database.get_active_profile_id()
+    database.replace_schedules(config.SYNTHETIC_SCHEDULE, profile_id=profile_id)
     reminder_scheduler.reload()
     return jsonify({"schedules": schedules_with_runtime()})
 
@@ -548,6 +739,7 @@ def today_schedule():
     ]
     return jsonify(
         {
+            "profile_id": database.get_active_profile_id(),
             "date": now.date().isoformat(),
             "weekday": weekday,
             "timezone": str(local_timezone),
@@ -557,6 +749,10 @@ def today_schedule():
         }
     )
 
+
+# ---------------------------------------------------------------------------
+# Simple quick companion actions from V2
+# ---------------------------------------------------------------------------
 
 @app.post("/api/companion/respond")
 def companion_respond():
@@ -589,27 +785,94 @@ def companion_respond():
         }
     elif intent in config.COMPANION_RESPONSES:
         expression, emoji, text = random.choice(config.COMPANION_RESPONSES[intent])
-        response = {"text": f"{name_prefix}{text}" if name_prefix else text, "expression": expression, "emoji": emoji}
+        response = {
+            "text": f"{name_prefix}{text}" if name_prefix else text,
+            "expression": expression,
+            "emoji": emoji,
+        }
     else:
         return jsonify({"error": "Unknown companion interaction."}), 400
-
     return jsonify(response)
 
+
+# ---------------------------------------------------------------------------
+# V3 conversational companion
+# ---------------------------------------------------------------------------
+
+@app.get("/api/ai/status")
+def ai_status():
+    return jsonify(companion_ai.status())
+
+
+@app.get("/api/chat/history")
+def chat_history():
+    active_profile = profile()
+    limit = request.args.get("limit", default=30, type=int) or 30
+    rows = database.chat_history(active_profile["id"], limit=limit)
+    return jsonify({"profile": active_profile, "messages": rows})
+
+
+@app.delete("/api/chat/history")
+def clear_chat_history():
+    active_profile = profile()
+    database.clear_chat(active_profile["id"])
+    return jsonify({"ok": True})
+
+
+@app.post("/api/chat")
+def chat():
+    payload = request.get_json(silent=True) or {}
+    message = clean_text(payload.get("message"), max_length=600)
+    if not message:
+        return jsonify({"error": "Type a message first."}), 400
+
+    active_profile = profile()
+    history = database.chat_history(
+        active_profile["id"],
+        limit=config.AI_MAX_HISTORY_MESSAGES,
+    )
+    reply = companion_ai.reply(
+        profile=active_profile,
+        message=message,
+        history=history,
+        schedule_context=upcoming_schedule_context(limit=4),
+    )
+    database.add_chat_message(active_profile["id"], "user", message)
+    database.add_chat_message(active_profile["id"], "assistant", reply.text)
+
+    return jsonify(
+        {
+            **reply.to_dict(),
+            "profile_id": active_profile["id"],
+            "profile_name": active_profile["display_name"],
+            "ai_status": companion_ai.status(),
+        }
+    )
+
+
+# ---------------------------------------------------------------------------
+# Trials + hardware
+# ---------------------------------------------------------------------------
 
 @app.get("/api/trials")
 def trials():
     limit = request.args.get("limit", default=20, type=int) or 20
-    rows = database.recent_trials(limit=limit)
-    return jsonify({"count": database.count_trials(), "trials": rows})
+    profile_id = database.get_active_profile_id()
+    rows = database.recent_trials(limit=limit, profile_id=profile_id)
+    return jsonify({"count": database.count_trials(profile_id=profile_id), "trials": rows})
 
 
 @app.get("/api/export.csv")
 def export_csv():
-    csv_text = database.export_csv()
+    active = profile()
+    csv_text = database.export_csv(profile_id=active["id"])
+    safe_id = re.sub(r"[^A-Za-z0-9_-]+", "_", active["participant_id"])
     return Response(
         csv_text,
         mimetype="text/csv",
-        headers={"Content-Disposition": "attachment; filename=assistive_robot_trials.csv"},
+        headers={
+            "Content-Disposition": f"attachment; filename=assistive_robot_trials_{safe_id}.csv"
+        },
     )
 
 
@@ -626,10 +889,16 @@ def test_hardware():
 
 if __name__ == "__main__":
     reminder_scheduler.start()
+    ai_status_line = companion_ai.status()
     print(f"\n{config.APP_NAME} v{config.APP_VERSION}")
     print(f"Open http://{config.HOST}:{config.PORT} in your browser")
     print(f"Hardware mode: {hardware.mode}")
     print(f"Scheduler: {'RUNNING' if reminder_scheduler.running else 'STOPPED'}")
+    print(f"Active profile: {profile()['display_name'] or profile()['participant_id']}")
+    print(
+        "Companion AI: "
+        + (f"OPENAI ({ai_status_line['model']})" if ai_status_line["api_available"] else "BASIC FALLBACK")
+    )
     print(f"Timezone: {local_timezone}\n")
     app.run(
         host=config.HOST,

@@ -1,0 +1,279 @@
+/* HRI Socially Assistive Robot V3 additions.
+   Intentionally separate from style.css so the user's hand-tuned cute face remains untouched. */
+
+.v3-profile-switcher {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 8px;
+    border: 1px solid var(--border, #cfe5f5);
+    border-radius: 14px;
+    background: rgba(255,255,255,.92);
+    box-shadow: 0 5px 18px rgba(70,125,165,.08);
+}
+
+.v3-profile-switcher select {
+    min-width: 120px;
+    max-width: 190px;
+    padding: 5px 25px 5px 7px !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    background-color: transparent !important;
+    font-weight: 700;
+    font-size: .78rem;
+}
+
+.v3-profile-icon { font-size: .9rem; }
+
+.v3-chat-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 42px;
+    padding: 8px 13px;
+    border: 1px solid var(--border, #cfe5f5);
+    border-radius: 14px;
+    background: #fff;
+    color: #244764;
+    font-weight: 800;
+    cursor: pointer;
+    box-shadow: 0 6px 18px rgba(67,127,171,.08);
+}
+
+.v3-chat-button:hover { background: #eaf7ff; }
+
+.v3-profile-manager { border-color: #bfe0f4 !important; }
+.v3-active-badge,
+.v3-current-label {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 9px;
+    border-radius: 999px;
+    background: #dff4ff;
+    color: #2379a8;
+    font-size: .72rem;
+    font-weight: 800;
+}
+
+.v3-profile-list {
+    display: grid;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.v3-profile-card {
+    display: grid;
+    grid-template-columns: 42px minmax(0,1fr) auto;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid #d4e7f4;
+    border-radius: 15px;
+    background: #fff;
+}
+
+.v3-profile-card.active {
+    border-color: #79c6ef;
+    background: #f1faff;
+}
+
+.v3-profile-avatar {
+    width: 38px;
+    height: 38px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    background: #e4f5ff;
+}
+
+.v3-profile-card-info {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+.v3-profile-card-info span,
+.v3-profile-card-info small { color: #69859b; }
+.v3-profile-card-info small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.v3-profile-card-actions {
+    display: flex;
+    gap: 5px;
+    align-items: center;
+}
+
+.v3-add-profile-box {
+    margin-top: 11px;
+    border-top: 1px solid #e0edf6;
+    padding-top: 10px;
+}
+.v3-add-profile-box summary {
+    cursor: pointer;
+    color: #286d97;
+    font-weight: 800;
+}
+.v3-add-profile-form { padding-top: 12px; }
+.v3-wide-label,
+.v3-about-label {
+    display: grid;
+    gap: 6px;
+    margin-top: 10px;
+    color: #57758d;
+    font-weight: 600;
+}
+.v3-check-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 10px 0;
+    color: #55758d;
+}
+.v3-check-row input { width: auto !important; }
+
+/* Chat */
+.v3-chat-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 1190;
+    background: rgba(45,76,99,.22);
+    backdrop-filter: blur(2px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity .2s ease;
+}
+.v3-chat-backdrop.show { opacity: 1; pointer-events: auto; }
+
+.v3-chat-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    z-index: 1200;
+    width: min(520px, 94vw);
+    height: 100vh;
+    display: grid;
+    grid-template-rows: auto auto minmax(0,1fr) auto auto;
+    gap: 0;
+    background: #f7fbff;
+    border-left: 1px solid #c7e0f1;
+    box-shadow: -20px 0 55px rgba(48,96,132,.16);
+    transform: translateX(103%);
+    transition: transform .24s ease;
+}
+.v3-chat-drawer.open { transform: translateX(0); }
+
+.v3-chat-header {
+    display: flex;
+    justify-content: space-between;
+    gap: 15px;
+    padding: 22px 22px 15px;
+    background: #fff;
+    border-bottom: 1px solid #dfedf6;
+}
+.v3-chat-header h2 { margin: 1px 0 4px; color: #173b59; }
+.v3-ai-status-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #68839a;
+    font-size: .75rem;
+}
+.v3-ai-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #e0b04a;
+}
+.v3-ai-dot.online { background: #4fc6a9; box-shadow: 0 0 8px rgba(79,198,169,.45); }
+
+.v3-chat-notice {
+    padding: 10px 16px;
+    background: #eaf7ff;
+    border-bottom: 1px solid #d1e8f6;
+    color: #55758c;
+    font-size: .76rem;
+    line-height: 1.35;
+}
+
+.v3-chat-messages {
+    overflow-y: auto;
+    padding: 17px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+.v3-chat-empty {
+    margin: auto;
+    max-width: 300px;
+    text-align: center;
+    color: #8298aa;
+}
+.v3-message {
+    max-width: 84%;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+.v3-message.user { align-self: flex-end; }
+.v3-message.assistant { align-self: flex-start; }
+.v3-message-label {
+    padding: 0 6px;
+    color: #8298aa;
+    font-size: .66rem;
+    font-weight: 800;
+}
+.v3-message.user .v3-message-label { text-align: right; }
+.v3-message > div {
+    padding: 10px 13px;
+    border-radius: 17px;
+    line-height: 1.4;
+    font-size: .9rem;
+}
+.v3-message.user > div {
+    color: #fff;
+    background: linear-gradient(180deg,#68c5f6,#42a9e6);
+    border-bottom-right-radius: 5px;
+}
+.v3-message.assistant > div {
+    color: #24455f;
+    background: #fff;
+    border: 1px solid #d3e7f5;
+    border-bottom-left-radius: 5px;
+}
+
+.v3-chat-compose {
+    display: grid;
+    grid-template-columns: minmax(0,1fr) 92px;
+    gap: 8px;
+    padding: 13px 16px;
+    border-top: 1px solid #dcebf5;
+    background: #fff;
+}
+.v3-chat-compose textarea {
+    resize: none;
+    min-height: 54px;
+}
+.v3-send-button {
+    min-height: 54px !important;
+    font-size: .9rem !important;
+}
+.v3-chat-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px 13px;
+    background: #fff;
+    color: #738da2;
+    font-size: .72rem;
+}
+
+@media (max-width: 900px) {
+    .v3-profile-switcher { display: none; }
+    .v3-chat-button span:last-child { display: none; }
+    .v3-profile-card { grid-template-columns: 38px minmax(0,1fr); }
+    .v3-profile-card-actions { grid-column: 1 / -1; justify-content: flex-end; }
+}

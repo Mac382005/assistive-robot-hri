@@ -1,3 +1,3 @@
-from reminders.scheduler import ReminderScheduler
+from .scheduler import ReminderScheduler
 
 __all__ = ["ReminderScheduler"]

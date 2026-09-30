@@ -1,11 +1,22 @@
+from __future__ import annotations
+
+import os
 from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # V3 installer adds python-dotenv
+    def load_dotenv(*args, **kwargs):
+        return False
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 DATABASE_PATH = DATA_DIR / "robot.db"
 
+load_dotenv(BASE_DIR / ".env")
+
 APP_NAME = "HRI Socially Assistive Robot"
-APP_VERSION = "2.0"
+APP_VERSION = "3.0"
 HOST = "127.0.0.1"
 PORT = 5000
 DEBUG = True
@@ -16,6 +27,19 @@ DEFAULT_CONDITION = "HIGH"
 ACKNOWLEDGEMENT_DISPLAY_SECONDS = 3.0
 DEFAULT_SNOOZE_MINUTES = 10
 STATE_POLL_SECONDS = 1.0
+
+# ---------------------------------------------------------------------------
+# Optional cloud companion AI
+# ---------------------------------------------------------------------------
+# V3 keeps the robot usable without an API key. If OPENAI_API_KEY is present,
+# the companion uses the OpenAI Responses API. Otherwise it falls back to a
+# small deterministic local conversation layer.
+AI_ENABLED = os.getenv("AI_ENABLED", "true").strip().lower() not in {"0", "false", "no", "off"}
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna"
+AI_MAX_HISTORY_MESSAGES = max(4, min(int(os.getenv("AI_MAX_HISTORY_MESSAGES", "12")), 30))
+AI_MAX_OUTPUT_TOKENS = max(80, min(int(os.getenv("AI_MAX_OUTPUT_TOKENS", "220")), 800))
+AI_TIMEOUT_SECONDS = max(5.0, min(float(os.getenv("AI_TIMEOUT_SECONDS", "15")), 60.0))
 
 REMINDERS = {
     "medication": {
@@ -62,7 +86,7 @@ REMINDERS = {
     },
 }
 
-# Demonstration schedule only. It is synthetic and is not medical advice.
+# Synthetic demonstration timetable only. It is not medication advice.
 # 0 = Monday ... 6 = Sunday.
 SYNTHETIC_SCHEDULE = [
     {
@@ -145,6 +169,41 @@ SYNTHETIC_SCHEDULE = [
         "message": "It is time to begin your evening routine and get ready to rest.",
         "condition_name": "HIGH",
         "enabled": True,
+    },
+]
+
+# Two clearly-labelled synthetic profiles for demonstrating profile isolation.
+DEMO_PROFILES = [
+    {
+        "participant_id": "DEMO_MARY",
+        "display_name": "Mary (Demo)",
+        "default_condition": "HIGH",
+        "about_me": "Enjoys gardening, tea, old movies and talking about flowers.",
+        "schedule": [
+            {**SYNTHETIC_SCHEDULE[0], "time_of_day": "07:45"},
+            {**SYNTHETIC_SCHEDULE[1], "time_of_day": "08:15"},
+            {**SYNTHETIC_SCHEDULE[2], "time_of_day": "10:00"},
+            {**SYNTHETIC_SCHEDULE[3], "time_of_day": "12:00"},
+            {**SYNTHETIC_SCHEDULE[4], "title": "Garden walk", "time_of_day": "14:30"},
+            {**SYNTHETIC_SCHEDULE[5], "time_of_day": "17:45"},
+            {**SYNTHETIC_SCHEDULE[6], "time_of_day": "18:15"},
+            {**SYNTHETIC_SCHEDULE[8], "time_of_day": "21:00"},
+        ],
+    },
+    {
+        "participant_id": "DEMO_ROBERT",
+        "display_name": "Robert (Demo)",
+        "default_condition": "HIGH",
+        "about_me": "Enjoys sport, jazz music, puzzles and morning walks.",
+        "schedule": [
+            {**SYNTHETIC_SCHEDULE[0], "time_of_day": "08:30"},
+            {**SYNTHETIC_SCHEDULE[1], "time_of_day": "09:00"},
+            {**SYNTHETIC_SCHEDULE[2], "time_of_day": "11:00"},
+            {**SYNTHETIC_SCHEDULE[3], "time_of_day": "13:00"},
+            {**SYNTHETIC_SCHEDULE[4], "title": "Puzzle and movement break", "time_of_day": "16:00"},
+            {**SYNTHETIC_SCHEDULE[5], "time_of_day": "19:00"},
+            {**SYNTHETIC_SCHEDULE[8], "time_of_day": "22:00"},
+        ],
     },
 ]
 

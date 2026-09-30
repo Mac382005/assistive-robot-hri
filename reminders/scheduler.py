@@ -14,15 +14,17 @@ DAY_CODES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 
 class ReminderScheduler:
-    """Schedules recurring reminders and temporary snoozed reminders."""
+    """Schedules reminders for the one currently active profile."""
 
     def __init__(
         self,
         database: RobotDatabase,
         on_due: Callable[[dict, str], None],
+        active_profile_id: Callable[[], int] | None = None,
     ) -> None:
         self.database = database
         self.on_due = on_due
+        self.active_profile_id = active_profile_id or database.get_active_profile_id
         self.timezone = get_localzone()
         self.scheduler = BackgroundScheduler(timezone=self.timezone, daemon=True)
         self._lock = threading.RLock()
@@ -46,6 +48,8 @@ class ReminderScheduler:
         schedule = self.database.get_schedule(schedule_id)
         if not schedule or not schedule["enabled"]:
             return
+        if int(schedule.get("profile_id") or 0) != int(self.active_profile_id()):
+            return
         self.on_due(schedule, "scheduled")
 
     def reload(self) -> None:
@@ -56,7 +60,11 @@ class ReminderScheduler:
                 if job.id.startswith("schedule-"):
                     self.scheduler.remove_job(job.id)
 
-            for schedule in self.database.list_schedules(enabled_only=True):
+            profile_id = int(self.active_profile_id())
+            for schedule in self.database.list_schedules(
+                enabled_only=True,
+                profile_id=profile_id,
+            ):
                 hour, minute = (int(part) for part in schedule["time_of_day"].split(":", 1))
                 day_codes = ",".join(DAY_CODES[int(day)] for day in schedule["days_of_week"])
                 trigger = CronTrigger(
@@ -82,6 +90,7 @@ class ReminderScheduler:
         run_at = datetime.now(self.timezone) + timedelta(minutes=safe_minutes)
         payload = {
             "id": active_reminder.get("schedule_id"),
+            "profile_id": active_reminder.get("profile_id", self.active_profile_id()),
             "title": active_reminder.get("title", "Reminder"),
             "reminder_type": active_reminder.get("reminder_type", "appointment"),
             "time_of_day": run_at.strftime("%H:%M"),

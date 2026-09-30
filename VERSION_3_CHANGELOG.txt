@@ -1,0 +1,33 @@
+HRI SOCIALLY ASSISTIVE ROBOT — VERSION 3
+========================================
+
+NEW
+- Multi-profile user system.
+- One active profile at a time.
+- Separate timetable for every profile.
+- Separate reminder trial history for every profile.
+- Separate persistent chat history for every profile.
+- User-provided About Me / interests field.
+- Profile selector in the main header.
+- Profile manager in the caregiver/developer panel.
+- Two optional synthetic demonstration profiles seeded automatically.
+- Conversational chat drawer.
+- Optional OpenAI Responses API integration.
+- Basic local conversation fallback when no API key is configured.
+- Cloud AI status indicator.
+- AI replies are spoken through the existing animated robot face.
+- Chat history clear control.
+
+ARCHITECTURE
+- New companion/ module.
+- New profiles and chat_messages SQLite tables.
+- Schedules migrated to profile ownership.
+- APScheduler arms only the currently active profile.
+- Existing V2 database is migrated automatically.
+- Existing style.css and robot.js are intentionally preserved by installer.
+
+SAFETY / PRIVACY
+- Cloud API calls use store=False.
+- API key is read from ignored .env file.
+- Medication decisions/dosage changes are outside companion scope.
+- Chat history remains separated by profile.

@@ -1,3 +1,3 @@
-from database.database import RobotDatabase
+from .database import RobotDatabase
 
 __all__ = ["RobotDatabase"]
