@@ -1,53 +1,51 @@
-# HRI Socially Assistive Robot — Version 1
+# HRI Socially Assistive Robot — Version 2
 
-A local, offline-first prototype for a tabletop socially assistive robot. Version 1 focuses on the HRI experiment workflow: show a reminder, vary the social-cue condition, record acknowledgement latency, and store the trial in SQLite.
+Version 2 develops the prototype from a simple reminder demonstrator into a more realistic tabletop companion. It remains local/offline-first and keeps Windows-safe mock hardware so the UI and scheduling system can be developed before the Raspberry Pi, arms and rotating base are connected.
 
-## Stack
+## What Version 2 adds
 
-- Python 3.13
-- Flask
-- HTML / CSS / JavaScript
-- SQLite
-- Mock hardware layer for Windows development
-- APScheduler installed for the next scheduling stage
+- More expressive robot face with blinking, eyebrows, cheeks, smiles, idle gestures and emoji reactions
+- Talking animation while browser speech is playing
+- Touch-based companion interactions: Say hello, What's next?, How are you?, Encourage me
+- Context-aware response for the next scheduled task
+- Persistent user profile with display name and default social mode
+- Full timetable editor with recurring day selection, time, task type, message, enable/disable, edit and delete
+- APScheduler recurring reminder jobs
+- Synthetic daily/weekly schedule seeded automatically for demonstration
+- Today's routine and next-reminder view on the main screen
+- `Done` and `Remind me in 10 min` actions
+- Snoozed interactions recorded separately in SQLite
+- Schedule-trigger testing from the caregiver panel
+- Existing HRI LOW/HIGH experiment mode retained
+- Existing mock hardware controls retained for later physical simulation
 
-## Version 1 features
+## Important design note
 
-- Friendly idle robot face and clock
-- LOW and HIGH social-cue conditions
-- Medication, hydration, meal and appointment test reminders
-- Large touchscreen-friendly acknowledgement button
-- Response timing using Python `time.monotonic()`
-- SQLite trial logging
-- Recent-trial table and CSV export
-- Developer panel
-- Mock head, LED and arm actions for development without Raspberry Pi hardware
-- No internet or external web assets required
+The Version 2 companion feels more conversational, but it is **not using a cloud LLM yet**. It uses reliable local interaction rules, schedule context and browser text-to-speech. This is intentional for the current prototype stage. Version 3 can map voice recognition onto the same interaction intents without replacing the reminder architecture.
 
-## Run
+Browser text-to-speech is still a development feature. For formal HRI data collection, use controlled recorded audio so all participants receive the same wording and voice.
+
+The included timetable is synthetic demonstration data only and is not medical advice.
+
+## Install / update
+
+From the existing project folder:
 
 ```powershell
 .venv\Scripts\Activate.ps1
 pip install -r requirements.txt
+python -m unittest discover -s tests -v
 python app.py
 ```
 
-Open `http://127.0.0.1:5000`.
+Open:
 
-## Tests
-
-```powershell
-python -m unittest discover -s tests -v
+```text
+http://127.0.0.1:5000
 ```
 
-## Important experiment note
+## Version roadmap
 
-Version 1 uses browser-generated speech as a development fallback so the HIGH condition can be demonstrated immediately. Before formal participant testing, replace this with fixed WAV recordings so wording, voice and timing are consistent across participants.
-
-## Next development stages
-
-1. Add scheduled reminders with APScheduler.
-2. Replace browser speech with fixed audio recordings.
-3. Add Raspberry Pi GPIO Zero hardware implementation.
-4. Connect proximity sensor and servos.
-5. Add kiosk-mode auto-start on Raspberry Pi OS.
+- **V2:** expressive companion + professional timetable/scheduler
+- **V3:** voice recognition and spoken intent input
+- **V4:** hardware simulation/integration for arms, head and rotating base

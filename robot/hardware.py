@@ -33,7 +33,17 @@ class MockHardwareController:
     def acknowledge(self, condition: SocialCondition) -> list[str]:
         events: list[str] = []
         if condition.acknowledgement:
-            events.append(self.audio.acknowledgement())
+            events.append(self.audio.speak("Great, thank you. I have marked that as done."))
+        if condition.led_indicator:
+            events.append(self.leds.set_reminder_led(False))
+        if condition.head_orientation:
+            events.append(self.servo.turn_head("centre"))
+        return events
+
+    def snooze(self, condition: SocialCondition) -> list[str]:
+        events: list[str] = []
+        if condition.acknowledgement:
+            events.append(self.audio.speak("No problem. I will remind you again shortly."))
         if condition.led_indicator:
             events.append(self.leds.set_reminder_led(False))
         return events

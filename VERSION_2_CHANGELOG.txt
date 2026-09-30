@@ -1,0 +1,28 @@
+VERSION 2 CHANGELOG
+===================
+
+FOCUS OF THIS UPDATE
+- richer social/companion behaviour
+- more expressive face and talking animation
+- more natural touch-based conversational responses
+- professional timetable and recurring reminder management
+- realistic synthetic daily/weekly schedule
+
+ADDED
+- multiple face expressions: happy, excited, caring, attentive, encouraging, sleepy
+- blink, wink, cheek, eyebrow, pupil and emoji animations
+- mouth animation during text-to-speech
+- companion quick interactions: hello, next task, how are you, encouragement
+- persistent user profile
+- timetable CRUD: add, edit, enable/disable, delete
+- recurring day-of-week scheduling using APScheduler
+- seeded synthetic routine
+- today/next-reminder dashboard
+- Done and Snooze actions
+- snooze re-scheduling
+- logging of acknowledged vs snoozed interactions
+- schedule test-now controls
+
+DEFERRED ON PURPOSE
+- voice recognition -> planned V3
+- physical arms/head/base simulation and hardware control -> planned after V3

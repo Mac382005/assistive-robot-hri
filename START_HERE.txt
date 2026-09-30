@@ -1,51 +1,55 @@
-HRI ASSISTIVE ROBOT — VERSION 1
+HRI ASSISTIVE ROBOT — VERSION 2
 ================================
 
-COPY THESE FILES INTO:
+UPDATE TARGET:
 C:\Users\MAC\Documents\HRI\assistive_robot
 
-The ZIP deliberately does NOT contain .venv, .git, or a database file.
-Keep your existing .venv and Git repository.
-
-1) In VS Code, open:
-   C:\Users\MAC\Documents\HRI\assistive_robot
-
-2) Open Terminal and activate the environment:
-   .venv\Scripts\Activate.ps1
-
-3) Make sure dependencies are installed:
-   pip install -r requirements.txt
-
-4) Run automated checks:
-   python -m unittest discover -s tests -v
-
-5) Start the robot software:
-   python app.py
-
-6) Open this in Chrome/Edge:
-   http://127.0.0.1:5000
-
-7) Click the gear icon in the top-right corner.
-   - Enter Participant ID
-   - Optional display name
-   - Choose LOW or HIGH
-   - Choose reminder type
-   - Click Trigger test reminder
-
-8) Press OK on the reminder screen.
-   The response time is stored automatically in:
-   data\robot.db
-
-9) Open the developer panel again to see recent trials.
-   Use Export CSV to download all trials.
-
-10) Stop the server with:
-   Ctrl + C
-
-11) Save this version in Git:
-   git add .
-   git commit -m "Add Version 1 robot UI and experiment workflow"
+VERSION 2 ADDS:
+- expressive animated face and emoji reactions
+- talking mouth animation
+- touch-based companion conversations
+- user profile
+- professional recurring timetable editor
+- synthetic demonstration schedule
+- APScheduler automatic reminders
+- today's routine + next reminder
+- Done + Snooze 10 min
+- updated interaction logging
 
 IMPORTANT:
-- Hardware actions are MOCKED on Windows. Look at the VS Code terminal when testing them.
-- Browser speech is only a development fallback. Use fixed WAV files before formal HRI testing.
+- Voice recognition is intentionally NOT in V2. That is planned for V3.
+- Physical arm/head/base simulation is intentionally NOT in V2. That is planned after voice recognition.
+- Browser speech is for prototype development, not controlled final HRI trials.
+- The demo timetable is synthetic and is not medical advice.
+
+AFTER EXTRACTING THE ZIP:
+
+1. Activate the existing environment:
+   .venv\Scripts\Activate.ps1
+
+2. Install/check packages:
+   python -m pip install -r requirements.txt
+
+3. Compile-check:
+   python -m compileall app.py config.py robot experiment database reminders tests
+
+4. Run tests:
+   python -m unittest discover -s tests -v
+
+5. Start V2:
+   python app.py
+
+6. Open:
+   http://127.0.0.1:5000
+
+7. Test:
+   - companion quick-talk buttons
+   - animated/talking face
+   - Today's routine
+   - gear -> User profile
+   - timetable add/edit/disable/delete
+   - Test now on a schedule entry
+   - Done and Snooze
+   - experiment LOW/HIGH test
+
+8. Do not Git commit until the UI has been checked.
