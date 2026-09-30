@@ -1,0 +1,38 @@
+# ============================================================
+# HRI Assistive Robot - Git Ignore
+# ============================================================
+
+# Python virtual environment
+.venv/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# VS Code local settings
+.vscode/
+
+# Environment variables / secrets
+.env
+
+# SQLite databases
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+
+# Log files
+*.log
+
+# Testing/cache files
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Operating system files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
