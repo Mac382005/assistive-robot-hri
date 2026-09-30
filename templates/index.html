@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#0b1d35">
+    <title>{{ app_name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body data-ack-seconds="{{ ack_seconds }}">
+    <main class="app-shell" aria-live="polite">
+        <header class="top-bar">
+            <div>
+                <p class="eyebrow">HRI prototype</p>
+                <h1>{{ app_name }}</h1>
+            </div>
+            <div class="top-actions">
+                <div class="status-pill" title="Hardware mode">
+                    <span class="status-dot"></span>
+                    <span id="hardware-mode">Mock hardware</span>
+                </div>
+                <button id="developer-toggle" class="icon-button" type="button" aria-label="Open developer panel">⚙</button>
+            </div>
+        </header>
+
+        <section id="idle-screen" class="screen active" aria-label="Robot idle screen">
+            <div class="face-wrap" aria-hidden="true">
+                <div class="robot-face happy" id="idle-face">
+                    <div class="eyes">
+                        <span class="eye"></span>
+                        <span class="eye"></span>
+                    </div>
+                    <div class="mouth"></div>
+                </div>
+            </div>
+            <p class="greeting" id="idle-greeting">Good afternoon</p>
+            <div class="clock" id="clock">--:--</div>
+            <p class="idle-help">I am ready when you need me.</p>
+        </section>
+
+        <section id="reminder-screen" class="screen" aria-label="Active reminder">
+            <div id="social-face" class="mini-face" aria-hidden="true">
+                <span class="mini-eye"></span>
+                <span class="mini-eye"></span>
+                <span class="mini-smile"></span>
+            </div>
+            <div class="reminder-card">
+                <div class="reminder-symbol" id="reminder-symbol" aria-hidden="true">💊</div>
+                <p class="condition-label" id="condition-label">Reminder</p>
+                <h2 id="reminder-title">Medication Reminder</h2>
+                <p id="personal-greeting" class="personal-greeting"></p>
+                <p id="reminder-message" class="reminder-message">Please take your medication.</p>
+                <button id="acknowledge-button" class="primary-button" type="button">OK</button>
+            </div>
+        </section>
+
+        <section id="ack-screen" class="screen" aria-label="Reminder acknowledged">
+            <div class="checkmark" aria-hidden="true">✓</div>
+            <h2>Thank you</h2>
+            <p>Your reminder has been acknowledged.</p>
+            <p class="response-result">Response time: <strong id="response-time">--</strong></p>
+        </section>
+    </main>
+
+    <aside id="developer-panel" class="developer-panel" aria-hidden="true">
+        <div class="developer-header">
+            <div>
+                <p class="eyebrow">Development tools</p>
+                <h2>Robot Control Panel</h2>
+            </div>
+            <button id="developer-close" class="icon-button" type="button" aria-label="Close developer panel">×</button>
+        </div>
+
+        <section class="panel-section">
+            <h3>Test a reminder</h3>
+            <div class="form-grid">
+                <label>
+                    Participant ID
+                    <input id="participant-id" type="text" value="P001" maxlength="30" autocomplete="off">
+                </label>
+                <label>
+                    Display name (optional)
+                    <input id="display-name" type="text" placeholder="e.g. Mary" maxlength="40" autocomplete="off">
+                </label>
+                <label>
+                    Experimental condition
+                    <select id="condition-select">
+                        <option value="LOW">LOW — text + beep</option>
+                        <option value="HIGH" selected>HIGH — social cues</option>
+                    </select>
+                </label>
+                <label>
+                    Reminder type
+                    <select id="reminder-select">
+                        <option value="medication">Medication</option>
+                        <option value="hydration">Hydration</option>
+                        <option value="meal">Meal</option>
+                        <option value="appointment">Appointment</option>
+                    </select>
+                </label>
+            </div>
+            <button id="trigger-reminder" class="primary-button compact" type="button">Trigger test reminder</button>
+            <p id="cue-summary" class="panel-note">HIGH condition: 5 social cues enabled.</p>
+        </section>
+
+        <section class="panel-section">
+            <h3>Mock hardware tests</h3>
+            <div class="button-grid">
+                <button class="secondary-button hardware-test" data-action="head_left" type="button">Head left</button>
+                <button class="secondary-button hardware-test" data-action="head_centre" type="button">Head centre</button>
+                <button class="secondary-button hardware-test" data-action="head_right" type="button">Head right</button>
+                <button class="secondary-button hardware-test" data-action="led_on" type="button">LED on</button>
+                <button class="secondary-button hardware-test" data-action="led_off" type="button">LED off</button>
+                <button class="secondary-button hardware-test" data-action="wave" type="button">Arm wave</button>
+            </div>
+            <p class="panel-note">On Windows these controls print mock actions in the VS Code terminal. Raspberry Pi GPIO will replace them later.</p>
+        </section>
+
+        <section class="panel-section">
+            <div class="section-heading-row">
+                <div>
+                    <h3>Recent trials</h3>
+                    <p class="panel-note"><span id="trial-count">0</span> trial(s) stored</p>
+                </div>
+                <a class="secondary-button small-link" href="/api/export.csv">Export CSV</a>
+            </div>
+            <div class="table-wrap">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Participant</th>
+                            <th>Condition</th>
+                            <th>Reminder</th>
+                            <th>Cues</th>
+                            <th>Response</th>
+                        </tr>
+                    </thead>
+                    <tbody id="trial-table-body">
+                        <tr><td colspan="6">No trials yet.</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </aside>
+
+    <div id="panel-backdrop" class="panel-backdrop" hidden></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+    <script src="{{ url_for('static', filename='js/robot.js') }}"></script>
+</body>
+</html>

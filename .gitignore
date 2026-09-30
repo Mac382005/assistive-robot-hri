@@ -1,7 +1,3 @@
-# ============================================================
-# HRI Assistive Robot - Git Ignore
-# ============================================================
-
 # Python virtual environment
 .venv/
 
@@ -36,3 +32,8 @@ Thumbs.db
 # Temporary files
 *.tmp
 *.temp
+
+# SQLite runtime files
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal
