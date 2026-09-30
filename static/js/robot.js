@@ -28,6 +28,120 @@ let toastTimer = null;
 let idleAnimationTimer = null;
 let talkingEyeTimer = null;
 
+
+/* === FEMALE_VOICE_PATCH_START === */
+
+/*
+    Pick a friendly female English voice explicitly.
+
+    Different Windows laptops may otherwise select different
+    default Web Speech voices.
+*/
+
+let preferredSpeechVoice = null;
+
+const preferredFemaleVoiceNames = [
+    "Microsoft Natasha",
+    "Microsoft Aria",
+    "Microsoft Jenny",
+    "Microsoft Sonia",
+    "Microsoft Zira",
+    "Samantha",
+    "Karen",
+    "Moira",
+    "Tessa",
+    "Google UK English Female"
+];
+
+
+function refreshPreferredSpeechVoice() {
+
+    if (!("speechSynthesis" in window)) {
+        return;
+    }
+
+    const voices =
+        window.speechSynthesis.getVoices();
+
+    if (!voices.length) {
+        return;
+    }
+
+    preferredSpeechVoice = null;
+
+
+    for (
+        const preferredName
+        of preferredFemaleVoiceNames
+    ) {
+
+        const match = voices.find(
+            (voice) =>
+                voice.name
+                    .toLowerCase()
+                    .includes(
+                        preferredName.toLowerCase()
+                    )
+        );
+
+        if (match) {
+
+            preferredSpeechVoice = match;
+
+            console.log(
+                "HRI voice selected:",
+                match.name,
+                match.lang
+            );
+
+            return;
+        }
+    }
+
+
+    /*
+        Prefer Australian English if none of our
+        explicitly female voices are installed.
+    */
+
+    preferredSpeechVoice =
+        voices.find(
+            (voice) =>
+                /^en-AU/i.test(voice.lang)
+        )
+        ||
+        voices.find(
+            (voice) =>
+                /^en/i.test(voice.lang)
+        )
+        ||
+        voices[0];
+
+
+    if (preferredSpeechVoice) {
+
+        console.log(
+            "HRI fallback voice selected:",
+            preferredSpeechVoice.name,
+            preferredSpeechVoice.lang
+        );
+    }
+}
+
+
+if ("speechSynthesis" in window) {
+
+    refreshPreferredSpeechVoice();
+
+    window.speechSynthesis.addEventListener(
+        "voiceschanged",
+        refreshPreferredSpeechVoice
+    );
+}
+
+/* === FEMALE_VOICE_PATCH_END === */
+
+
 function showScreen(name) {
     Object.entries(screens).forEach(([key, element]) => {
         element.classList.toggle("active", key === name);
@@ -201,8 +315,18 @@ function speak(text, face = idleFace, expression = null) {
 
     const utterance = new SpeechSynthesisUtterance(text);
 
+    refreshPreferredSpeechVoice();
+
+    if (preferredSpeechVoice) {
+        utterance.voice = preferredSpeechVoice;
+        utterance.lang =
+            preferredSpeechVoice.lang || "en-AU";
+    } else {
+        utterance.lang = "en-AU";
+    }
+
     utterance.rate = 0.91;
-    utterance.pitch = 1.08;
+    utterance.pitch = 1.10;
     utterance.volume = 1.0;
 
     utterance.onstart = () => {

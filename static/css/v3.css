@@ -277,3 +277,105 @@
     .v3-profile-card { grid-template-columns: 38px minmax(0,1fr); }
     .v3-profile-card-actions { grid-column: 1 / -1; justify-content: flex-end; }
 }
+
+
+/* === V3_CHAT_OVERFLOW_FIX === */
+
+/*
+    The global .primary-button style has min-width: 240px.
+    The V3 chat send button lives inside a much narrower grid
+    column, so it must explicitly override that minimum width.
+*/
+
+.v3-chat-compose {
+    grid-template-columns:
+        minmax(0, 1fr)
+        105px !important;
+
+    width:
+        100% !important;
+
+    min-width:
+        0 !important;
+}
+
+.v3-chat-compose textarea {
+    min-width:
+        0 !important;
+
+    width:
+        100% !important;
+}
+
+.v3-send-button {
+    min-width:
+        0 !important;
+
+    width:
+        100% !important;
+
+    max-width:
+        105px !important;
+
+    padding:
+        10px 8px !important;
+
+    font-size:
+        0.88rem !important;
+
+    overflow:
+        hidden !important;
+
+    white-space:
+        nowrap !important;
+}
+
+.v3-chat-footer {
+    min-width:
+        0 !important;
+}
+
+.v3-chat-drawer {
+    overflow:
+        hidden !important;
+}
+
+
+/* Slightly tighter chat controls on short laptop displays */
+
+@media (max-height: 700px) {
+
+    .v3-chat-header {
+        padding:
+            15px 17px 10px !important;
+    }
+
+    .v3-chat-notice {
+        padding:
+            8px 14px !important;
+    }
+
+    .v3-chat-compose {
+        padding:
+            9px 12px !important;
+
+        grid-template-columns:
+            minmax(0, 1fr)
+            92px !important;
+    }
+
+    .v3-send-button {
+        max-width:
+            92px !important;
+
+        min-height:
+            50px !important;
+    }
+
+    .v3-chat-footer {
+        padding:
+            6px 12px 9px !important;
+    }
+}
+
+/* === V3_CHAT_OVERFLOW_FIX_END === */
