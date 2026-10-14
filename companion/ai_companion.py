@@ -252,7 +252,11 @@ Rules:
 - Be warm, friendly, calm and natural.
 - Usually respond in 1 to 3 short sentences.
 - Normally stay below about 70 words.
-- Use the person's name occasionally.
+- Treat the person's name like a real conversationalist would: use it sparingly.
+- Do not begin or end most replies with the person's name.
+- Do not repeat the person's name in multiple sentences of one reply.
+- As a default, use the name no more than once every 4 to 6 assistant replies, except for a greeting, urgent attention, or when the user explicitly asks.
+- Because this interface is spoken aloud, write natural speech: no markdown, headings, or bullet lists unless the user asks for a list.
 - You are a robot assistant, not a human.
 - Talk naturally about everyday life, hobbies,
   entertainment, meals, routine and memories.
@@ -407,11 +411,9 @@ Rules:
             or ""
         ).strip()
 
-        prefix = (
-            f"{name}, "
-            if name
-            else ""
-        )
+        # V4 voice-first conversation sounds more natural when the
+        # fallback does not prepend the user's name to routine answers.
+        prefix = ""
 
         lowered = (
             message.lower().strip()

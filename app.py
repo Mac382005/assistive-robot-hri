@@ -208,6 +208,7 @@ def start_reminder_core(
             "started_at": started_at,
             "source": source,
             "schedule_id": schedule_id,
+            "followup_count": 0,
         }
         robot_state["mode"] = "reminder"
         robot_state["active_reminder"] = active
@@ -380,6 +381,8 @@ def public_config():
             "acknowledgement_display_seconds": config.ACKNOWLEDGEMENT_DISPLAY_SECONDS,
             "snooze_minutes": config.DEFAULT_SNOOZE_MINUTES,
             "state_poll_seconds": config.STATE_POLL_SECONDS,
+            "reminder_followup_seconds": config.REMINDER_FOLLOWUP_SECONDS,
+            "reminder_max_followups": config.REMINDER_MAX_FOLLOWUPS,
             "conditions": {name: condition.to_dict() for name, condition in CONDITIONS.items()},
             "reminders": config.REMINDERS,
             "hardware_mode": hardware.mode,
@@ -543,6 +546,7 @@ def acknowledge_reminder():
             started_at=timing["started_at"],
             acknowledged_at=timing["acknowledged_at"],
             response_time_ms=timing["response_time_ms"],
+            notes=f"Reminder follow-ups: {int(active.get('followup_count') or 0)}",
             acknowledged=True,
             action="acknowledged",
             schedule_id=active.get("schedule_id"),
@@ -556,6 +560,7 @@ def acknowledge_reminder():
             "condition": condition.name,
             "social_cue_count": condition.social_cue_count,
             "action": "acknowledged",
+            "followup_count": int(active.get("followup_count") or 0),
             **timing,
         }
         robot_state["mode"] = "acknowledgement"
@@ -600,7 +605,10 @@ def snooze_reminder():
             action="snoozed",
             schedule_id=active.get("schedule_id"),
             source=active.get("source", "manual"),
-            notes=f"Snoozed for {minutes} minutes",
+            notes=(
+                f"Snoozed for {minutes} minutes; "
+                f"reminder follow-ups: {int(active.get('followup_count') or 0)}"
+            ),
         )
         run_at = reminder_scheduler.schedule_snooze(active, minutes)
         result = {
@@ -608,6 +616,7 @@ def snooze_reminder():
             "action": "snoozed",
             "snooze_minutes": minutes,
             "snooze_until": run_at,
+            "followup_count": int(active.get("followup_count") or 0),
             **timing,
         }
         robot_state["mode"] = "acknowledgement"
@@ -631,6 +640,150 @@ def reset_reminder():
     snapshot = state_snapshot()
     snapshot["hardware_events"] = hardware_events
     return jsonify(snapshot)
+
+
+
+# ---------------------------------------------------------------------------
+# V4.2 adaptive reminder follow-up
+# ---------------------------------------------------------------------------
+
+def _adaptive_followup_text(active: dict, attempt: int) -> dict:
+    """Return a natural follow-up, or the exact original cue when cloud AI is unavailable."""
+    original = clean_text(
+        active.get("voice_message") or active.get("message"),
+        fallback="It is time for your reminder.",
+        max_length=500,
+    )
+    condition = active.get("condition") or {}
+    voice_enabled = bool(condition.get("voice_reminder"))
+    expression = "attentive" if attempt <= 1 else "caring"
+
+    # Preserve the experimental LOW condition: repeat the same non-social cue.
+    # Also use this exact-repeat path whenever Gemini is unavailable/offline.
+    if not voice_enabled or not companion_ai.api_available:
+        return {
+            "text": original,
+            "mode": "repeat",
+            "model": None,
+            "expression": expression,
+            "emoji": "🔔",
+        }
+
+    reminder_type = clean_text(active.get("reminder_type"), max_length=30)
+    title = clean_text(active.get("title"), max_length=80)
+    configured_message = clean_text(active.get("message"), max_length=240)
+
+    prompt = f"""
+This is an INTERNAL reminder follow-up task for a socially assistive robot.
+The person has not yet acknowledged a configured reminder after the first prompt.
+
+Attempt number: {attempt}
+Reminder type: {reminder_type}
+Reminder title: {title}
+Configured reminder: {configured_message}
+Original spoken reminder: {original}
+
+Write ONLY the one short sentence the robot should say now.
+Rules:
+- Keep it warm, natural and under about 22 words.
+- Do not use the person's name.
+- Gently regain attention and repeat the purpose of the configured reminder.
+- On the first follow-up, wording like "Are you there?" or "Can you hear me?" is appropriate.
+- On later follow-ups, it may gently ask "Are you okay?" before restating the reminder.
+- Vary the wording; do not simply repeat the exact original when cloud AI is working.
+- Do not invent new tasks, facts, medication names, doses or medical instructions.
+- For medication, only remind the person to follow the already-configured medication reminder.
+- Do not claim an emergency or that the robot detected a medical problem.
+- Do not shame, pressure or frighten the person.
+- No markdown, labels, quotation marks or explanation.
+""".strip()
+
+    reply = companion_ai.reply(
+        profile=profile(),
+        message=prompt,
+        history=[],
+        schedule_context=[],
+    )
+
+    # The companion automatically falls back to BASIC if Gemini cannot be
+    # reached. In that case the requirement is to repeat the original sentence.
+    if reply.mode == "basic":
+        return {
+            "text": original,
+            "mode": "repeat",
+            "model": None,
+            "expression": expression,
+            "emoji": "🔔",
+        }
+
+    generated = clean_text(reply.text, max_length=240).strip(' "\'')
+    if not generated:
+        generated = original
+        mode = "repeat"
+        model = None
+    else:
+        mode = reply.mode
+        model = reply.model
+
+    return {
+        "text": generated,
+        "mode": mode,
+        "model": model,
+        "expression": expression,
+        "emoji": "💛" if attempt >= 2 else "🔔",
+    }
+
+
+@app.post("/api/reminder/followup")
+def reminder_followup():
+    with state_lock:
+        if robot_state["mode"] != "reminder" or not robot_state["active_reminder"]:
+            return jsonify({"error": "There is no active reminder to follow up."}), 409
+
+        current = robot_state["active_reminder"]
+        completed = int(current.get("followup_count") or 0)
+        maximum = int(config.REMINDER_MAX_FOLLOWUPS)
+
+        if completed >= maximum:
+            return jsonify(
+                {
+                    "done": True,
+                    "attempt": completed,
+                    "max_followups": maximum,
+                    "followup_seconds": config.REMINDER_FOLLOWUP_SECONDS,
+                }
+            )
+
+        attempt = completed + 1
+        current["followup_count"] = attempt
+        active = deepcopy(current)
+        reminder_started_at = active.get("started_at")
+        touch_state()
+
+    result = _adaptive_followup_text(active, attempt)
+
+    # The participant may acknowledge while Gemini is producing the re-prompt.
+    # Never speak a stale follow-up after the reminder has already ended.
+    with state_lock:
+        still_active = (
+            robot_state["mode"] == "reminder"
+            and robot_state["active_reminder"]
+            and robot_state["active_reminder"].get("started_at") == reminder_started_at
+        )
+    if not still_active:
+        return jsonify({"error": "The reminder was already completed."}), 409
+
+    return jsonify(
+        {
+            **result,
+            "done": False,
+            "attempt": attempt,
+            "max_followups": int(config.REMINDER_MAX_FOLLOWUPS),
+            "followup_seconds": float(config.REMINDER_FOLLOWUP_SECONDS),
+            "voice_enabled": bool((active.get("condition") or {}).get("voice_reminder")),
+            "reminder_started_at": reminder_started_at,
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -759,7 +912,9 @@ def companion_respond():
     payload = request.get_json(silent=True) or {}
     intent = clean_text(payload.get("intent"), max_length=30).lower()
     user = profile()
-    name_prefix = f"{user['display_name']}, " if user["display_name"] else ""
+    # V4: avoid repeating the user's name in routine companion replies.
+    # The explicit hello greeting below can still use it naturally once.
+    name_prefix = ""
 
     if intent == "next":
         next_item = next_occurrence()

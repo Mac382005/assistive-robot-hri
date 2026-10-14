@@ -26,6 +26,8 @@ let currentSchedules = [];
 let acknowledging = false;
 let toastTimer = null;
 let idleAnimationTimer = null;
+let reminderFollowupTimer = null;
+let reminderFollowupBusy = false;
 let talkingEyeTimer = null;
 
 
@@ -41,10 +43,15 @@ let talkingEyeTimer = null;
 let preferredSpeechVoice = null;
 
 const preferredFemaleVoiceNames = [
-    "Microsoft Natasha",
+    "Microsoft Aria Online (Natural)",
+    "Microsoft Jenny Online (Natural)",
+    "Microsoft Sonia Online (Natural)",
+    "Microsoft Ava Online (Natural)",
     "Microsoft Aria",
     "Microsoft Jenny",
     "Microsoft Sonia",
+    "Microsoft Ava",
+    "Microsoft Natasha",
     "Microsoft Zira",
     "Samantha",
     "Karen",
@@ -68,6 +75,22 @@ function refreshPreferredSpeechVoice() {
     }
 
     preferredSpeechVoice = null;
+
+    // V4.1: the Control Centre can save an exact browser/system voice.
+    // No voice files are bundled with the project.
+    try {
+        const savedVoiceName = window.localStorage.getItem("hri_robot_voice_name");
+        if (savedVoiceName) {
+            const savedVoice = voices.find((voice) => voice.name === savedVoiceName);
+            if (savedVoice) {
+                preferredSpeechVoice = savedVoice;
+                console.log("HRI saved voice selected:", savedVoice.name, savedVoice.lang);
+                return;
+            }
+        }
+    } catch (error) {
+        console.debug("Saved TTS voice preference unavailable:", error);
+    }
 
 
     for (
@@ -325,8 +348,8 @@ function speak(text, face = idleFace, expression = null) {
         utterance.lang = "en-AU";
     }
 
-    utterance.rate = 0.91;
-    utterance.pitch = 1.10;
+    utterance.rate = 0.94;
+    utterance.pitch = 1.05;
     utterance.volume = 1.0;
 
     utterance.onstart = () => {
@@ -403,6 +426,91 @@ async function companionInteraction(intent) {
     }
 }
 
+
+function clearReminderFollowupTimer() {
+    if (reminderFollowupTimer) {
+        window.clearTimeout(reminderFollowupTimer);
+        reminderFollowupTimer = null;
+    }
+}
+
+function reminderFollowupSeconds() {
+    const value = Number(publicConfig?.reminder_followup_seconds ?? 20);
+    return Math.max(8, Number.isFinite(value) ? value : 20);
+}
+
+function reminderMaxFollowups() {
+    const value = Number(publicConfig?.reminder_max_followups ?? 3);
+    return Math.max(0, Number.isFinite(value) ? value : 3);
+}
+
+function scheduleReminderFollowup(active) {
+    clearReminderFollowupTimer();
+    if (!active || !active.started_at) return;
+
+    const completed = Number(active.followup_count || 0);
+    const maximum = reminderMaxFollowups();
+    if (maximum <= 0 || completed >= maximum) return;
+
+    const expectedStartedAt = active.started_at;
+    reminderFollowupTimer = window.setTimeout(() => {
+        reminderFollowupTimer = null;
+        requestReminderFollowup(expectedStartedAt);
+    }, reminderFollowupSeconds() * 1000);
+}
+
+async function requestReminderFollowup(expectedStartedAt) {
+    if (reminderFollowupBusy) return;
+    if (!screens.reminder.classList.contains("active")) return;
+
+    reminderFollowupBusy = true;
+    try {
+        const data = await api("/api/reminder/followup", {
+            method: "POST",
+            body: "{}",
+        });
+
+        if (!screens.reminder.classList.contains("active")) return;
+        if (data.reminder_started_at && data.reminder_started_at !== expectedStartedAt) return;
+        if (data.done) return;
+
+        const text = String(data.text || "").trim();
+        if (text) {
+            document.getElementById("reminder-speech").textContent = text;
+        }
+
+        const expression = data.expression || (Number(data.attempt) >= 2 ? "caring" : "attentive");
+        setFaceExpression(reminderFace, expression);
+
+        // HIGH condition: adaptive spoken re-prompt.
+        // LOW condition: preserve the original beep/text experimental cue.
+        if (data.voice_enabled && text) {
+            speak(text, reminderFace, expression);
+        } else {
+            beep();
+        }
+
+        if (Number(data.attempt || 0) < Number(data.max_followups || 0)) {
+            scheduleReminderFollowup({
+                started_at: expectedStartedAt,
+                followup_count: Number(data.attempt || 0),
+            });
+        }
+    } catch (error) {
+        // A local server/network hiccup should not crash the reminder screen.
+        // If the reminder is still active, give it another chance later.
+        console.warn("Reminder follow-up unavailable:", error);
+        if (screens.reminder.classList.contains("active")) {
+            reminderFollowupTimer = window.setTimeout(() => {
+                reminderFollowupTimer = null;
+                requestReminderFollowup(expectedStartedAt);
+            }, reminderFollowupSeconds() * 1000);
+        }
+    } finally {
+        reminderFollowupBusy = false;
+    }
+}
+
 function renderReminder(active, playAudio = true) {
     if (!active) return;
     const condition = active.condition;
@@ -433,6 +541,10 @@ function renderReminder(active, playAudio = true) {
         } else {
             beep();
         }
+    }
+
+    if (isNew) {
+        scheduleReminderFollowup(active);
     }
 }
 
@@ -480,6 +592,7 @@ async function triggerReminder() {
 }
 
 async function acknowledgeReminder() {
+    clearReminderFollowupTimer();
     if (acknowledging) return;
     acknowledging = true;
     acknowledgeButton.disabled = true;
@@ -500,6 +613,7 @@ async function acknowledgeReminder() {
 }
 
 async function snoozeReminder() {
+    clearReminderFollowupTimer();
     if (acknowledging) return;
     acknowledging = true;
     acknowledgeButton.disabled = true;
@@ -524,6 +638,7 @@ async function snoozeReminder() {
 }
 
 function scheduleReturnToIdle() {
+    clearReminderFollowupTimer();
     const delayMs = Math.max(1200, Number(document.body.dataset.ackSeconds || 3) * 1000);
     window.setTimeout(async () => {
         try {
@@ -866,10 +981,12 @@ async function syncState() {
         if (data.mode === "reminder" && data.active_reminder) {
             renderReminder(data.active_reminder, true);
         } else if (data.mode === "acknowledgement" && data.last_result) {
+            clearReminderFollowupTimer();
             if (!screens.acknowledgement.classList.contains("active")) {
                 renderAcknowledgement(data.last_result, data.active_reminder?.condition?.name || "LOW", false);
             }
         } else if (data.mode === "idle" && !screens.idle.classList.contains("active")) {
+            clearReminderFollowupTimer();
             currentReminderKey = null;
             showScreen("idle");
         }

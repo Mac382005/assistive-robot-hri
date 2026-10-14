@@ -16,7 +16,7 @@ DATABASE_PATH = DATA_DIR / "robot.db"
 load_dotenv(BASE_DIR / ".env")
 
 APP_NAME = "HRI Socially Assistive Robot"
-APP_VERSION = "3.1"
+APP_VERSION = "4.2"
 HOST = "127.0.0.1"
 PORT = 5000
 DEBUG = True
@@ -27,6 +27,18 @@ DEFAULT_CONDITION = "HIGH"
 ACKNOWLEDGEMENT_DISPLAY_SECONDS = 3.0
 DEFAULT_SNOOZE_MINUTES = 10
 STATE_POLL_SECONDS = 1.0
+
+# V4.2 adaptive reminder follow-up.
+# Defaults are deliberately short enough for a prototype/demo while still
+# giving the participant time to respond to the first reminder.
+REMINDER_FOLLOWUP_SECONDS = max(
+    8.0,
+    min(float(os.getenv("REMINDER_FOLLOWUP_SECONDS", "20")), 300.0),
+)
+REMINDER_MAX_FOLLOWUPS = max(
+    0,
+    min(int(os.getenv("REMINDER_MAX_FOLLOWUPS", "3")), 8),
+)
 
 # ---------------------------------------------------------------------------
 # Optional cloud companion AI
