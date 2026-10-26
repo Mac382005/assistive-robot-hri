@@ -1,4 +1,4 @@
-/* HRI Robot V4.4 - commercial display / kiosk layer */
+/* HRI Robot V4.4.1 - commercial display / kiosk layer */
 (() => {
     "use strict";
 
@@ -98,6 +98,11 @@
     }
 
     async function startRobotMode() {
+        // Prime iPad speech synthesis while this function still has direct user
+        // activation. The promise is intentionally not awaited so fullscreen
+        // permission remains tied to the same Start Robot tap.
+        try { window.hriPrimeSpeechOutput?.(); } catch (_) {}
+
         // Must be initiated directly by a user click so iPad/desktop browsers are
         // allowed to enter Fullscreen API mode.
         setDisplayActive(true);
@@ -132,6 +137,8 @@
     }
 
     function continueBrowserMode() {
+        // This button is also a direct user gesture, so use it to unlock TTS.
+        try { window.hriPrimeSpeechOutput?.(); } catch (_) {}
         setDisplayActive(false);
         hideLaunchOverlay();
         try { sessionStorage.setItem(STORAGE_KEY, "browser"); } catch (_) {}

@@ -9,17 +9,70 @@ except ImportError:  # V3 installer adds python-dotenv
     def load_dotenv(*args, **kwargs):
         return False
 
+# === V4.5 cloud/runtime configuration ===
 BASE_DIR = Path(__file__).resolve().parent
-DATA_DIR = BASE_DIR / "data"
-DATABASE_PATH = DATA_DIR / "robot.db"
-
 load_dotenv(BASE_DIR / ".env")
 
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default)
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+IS_RAILWAY = any(
+    os.getenv(name)
+    for name in (
+        "RAILWAY_SERVICE_NAME",
+        "RAILWAY_DEPLOYMENT_ID",
+        "RAILWAY_ENVIRONMENT_NAME",
+    )
+)
+CLOUD_MODE = _env_flag("CLOUD_MODE", default=IS_RAILWAY)
+
+# Railway exposes the attached volume path automatically. Locally, continue to
+# use the project's existing data/ directory unless explicitly overridden.
+_data_dir_value = (
+    os.getenv("DATA_DIR", "").strip()
+    or os.getenv("RAILWAY_VOLUME_MOUNT_PATH", "").strip()
+)
+DATA_DIR = Path(_data_dir_value).expanduser() if _data_dir_value else BASE_DIR / "data"
+
+_database_path_value = os.getenv("DATABASE_PATH", "").strip()
+DATABASE_PATH = (
+    Path(_database_path_value).expanduser()
+    if _database_path_value
+    else DATA_DIR / "robot.db"
+)
+
 APP_NAME = "HRI Socially Assistive Robot"
-APP_VERSION = "4.4"
-HOST = os.getenv("HOST", "127.0.0.1").strip() or "127.0.0.1"
-PORT = 5000
-DEBUG = True
+APP_VERSION = "4.5"
+_default_host = "0.0.0.0" if CLOUD_MODE else "127.0.0.1"
+HOST = os.getenv("HOST", _default_host).strip() or _default_host
+try:
+    PORT = max(1, min(int(os.getenv("PORT", "5000")), 65535))
+except ValueError:
+    PORT = 5000
+DEBUG = _env_flag("DEBUG", default=not CLOUD_MODE)
+
+# Cloud containers often run in UTC. Force the research robot's local civil
+# time unless the deployer deliberately chooses another IANA timezone.
+APP_TIMEZONE = os.getenv(
+    "APP_TIMEZONE",
+    "Australia/Sydney" if CLOUD_MODE else "",
+).strip()
+
+# Public deployments should not expose caregiver controls and participant data
+# to anyone who discovers the URL. Local development remains unlocked.
+CLOUD_AUTH_REQUIRED = _env_flag("CLOUD_AUTH_REQUIRED", default=CLOUD_MODE)
+CLOUD_ACCESS_CODE = os.getenv("CLOUD_ACCESS_CODE", "").strip()
+APP_SECRET_KEY = os.getenv("APP_SECRET_KEY", "").strip()
+try:
+    CLOUD_SESSION_DAYS = max(1, min(int(os.getenv("CLOUD_SESSION_DAYS", "30")), 365))
+except ValueError:
+    CLOUD_SESSION_DAYS = 30
+# === V4.5 cloud/runtime configuration end ===
 
 # V4.3 tablet/base networking. The normal desktop default remains localhost.
 SSL_CERT_PATH = os.getenv("SSL_CERT_PATH", "").strip()

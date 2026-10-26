@@ -1,0 +1,23 @@
+.git
+.github
+.venv
+.env
+certs
+__pycache__
+*.py[cod]
+.pytest_cache
+.coverage
+htmlcov
+*.log
+*.tmp
+*.temp
+*_backup_*
+assistive_robot_v*.zip
+
+# Never bake local participant/trial/chat data into a public image.
+data/*.db
+data/*.sqlite
+data/*.sqlite3
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal

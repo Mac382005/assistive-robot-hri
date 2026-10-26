@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#eef8ff">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="HRI Robot">
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='img/robot-app-icon-180.png') }}">
+    <title>Unlock {{ app_name }}</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/cloud_login.css') }}">
+</head>
+<body>
+    <main class="cloud-login-shell">
+        <section class="cloud-login-card" aria-labelledby="login-title">
+            <div class="cloud-login-face" aria-hidden="true">⌒‿⌒</div>
+            <p class="cloud-login-eyebrow">HRI companion · v{{ app_version }}</p>
+            <h1 id="login-title">{{ app_name }}</h1>
+
+            {% if setup_incomplete %}
+                <p class="cloud-login-copy">Cloud access protection still needs to be configured by the robot administrator.</p>
+                <div class="cloud-login-alert error">
+                    Set <strong>CLOUD_ACCESS_CODE</strong> and <strong>APP_SECRET_KEY</strong> in the hosting service, then redeploy.
+                </div>
+            {% else %}
+                <p class="cloud-login-copy">Enter the private robot access code to continue.</p>
+                {% if error %}<div class="cloud-login-alert error">{{ error }}</div>{% endif %}
+                <form method="post" action="{{ url_for('cloud_login') }}" autocomplete="off">
+                    <input type="hidden" name="next" value="{{ next_url }}">
+                    <label for="access-code">Robot access code</label>
+                    <input
+                        id="access-code"
+                        name="access_code"
+                        type="password"
+                        inputmode="text"
+                        autocomplete="current-password"
+                        maxlength="128"
+                        autofocus
+                        required
+                    >
+                    <button type="submit">Unlock Robot</button>
+                </form>
+                <p class="cloud-login-note">This device stays signed in for the configured cloud session period.</p>
+            {% endif %}
+        </section>
+    </main>
+</body>
+</html>

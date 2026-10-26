@@ -1,5 +1,5 @@
 /*
- * HRI Socially Assistive Robot V4.3.2
+ * HRI Socially Assistive Robot V4.4.1
  * Voice-first, face-first interaction layer with tablet audio capture.
  *
  * Input modes:
@@ -36,6 +36,7 @@
     let mediaChunks = [];
     let recordingMimeType = "";
     let recordingStartedAt = 0;
+    let preparingVoiceSession = false;
 
     function el(id) {
         return document.getElementById(id);
@@ -672,9 +673,31 @@
         }, 1200);
     }
 
-    function toggleVoiceSession() {
-        if (voiceSessionActive) finishVoiceSession();
-        else startVoiceSession();
+    async function toggleVoiceSession() {
+        if (voiceSessionActive) {
+            finishVoiceSession();
+            return;
+        }
+
+        if (preparingVoiceSession || isThinking) return;
+        preparingVoiceSession = true;
+
+        try {
+            // iPad/WebKit may refuse a later asynchronous SpeechSynthesis call
+            // until speech has first been started by a direct user gesture.
+            // Prime it from this face/mic tap before opening the microphone.
+            if (isIOSLike() && typeof window.hriPrimeSpeechOutput === "function") {
+                await window.hriPrimeSpeechOutput();
+            }
+        } catch (error) {
+            console.debug("Speech output priming was skipped:", error);
+        } finally {
+            preparingVoiceSession = false;
+        }
+
+        if (!voiceSessionActive && !isThinking) {
+            startVoiceSession();
+        }
     }
 
     function formatHistoryTime(value) {

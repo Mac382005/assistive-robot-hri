@@ -295,6 +295,105 @@ function beep() {
     }
 }
 
+/* === V4.4.1_IOS_TTS_PRIME_START === */
+function primeSpeechOutput() {
+    if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
+        return Promise.resolve(false);
+    }
+
+    const synthesis = window.speechSynthesis;
+
+    if (window.__hriSpeechOutputPrimed) {
+        try { synthesis.resume(); } catch (_) {}
+        return Promise.resolve(true);
+    }
+
+    // Reuse the same in-flight warm-up when Start Robot and the first face tap
+    // happen close together.
+    if (window.__hriSpeechPrimePromise) {
+        return window.__hriSpeechPrimePromise;
+    }
+
+    try {
+        if (navigator.audioSession && "type" in navigator.audioSession) {
+            navigator.audioSession.type = "playback";
+        }
+    } catch (_) {}
+
+    try { synthesis.cancel(); } catch (_) {}
+    try { synthesis.resume(); } catch (_) {}
+
+    window.__hriSpeechPrimePromise = new Promise((resolve) => {
+        let started = false;
+        let settled = false;
+        let timer = null;
+
+        // WebKit/iPad may require SpeechSynthesis to be invoked while a user
+        // gesture is active. A very quiet, fast utterance warms the speech path
+        // without making the user visit Controls -> Test voice first.
+        const utterance = new SpeechSynthesisUtterance("Ready");
+        window.__hriSpeechPrimeUtterance = utterance;
+
+        try {
+            refreshPreferredSpeechVoice();
+            if (preferredSpeechVoice) {
+                utterance.voice = preferredSpeechVoice;
+                utterance.lang = preferredSpeechVoice.lang || "en-AU";
+            } else {
+                utterance.lang = /^en/i.test(navigator.language || "")
+                    ? navigator.language
+                    : "en-AU";
+            }
+        } catch (_) {
+            utterance.lang = "en-AU";
+        }
+
+        utterance.rate = 2.0;
+        utterance.pitch = 1.0;
+        utterance.volume = 0.015;
+
+        const finish = (ok) => {
+            if (settled) return;
+            settled = true;
+            if (timer) window.clearTimeout(timer);
+            if (ok) window.__hriSpeechOutputPrimed = true;
+            window.__hriSpeechPrimeUtterance = null;
+            window.__hriSpeechPrimePromise = null;
+            resolve(Boolean(ok));
+        };
+
+        utterance.onstart = () => {
+            started = true;
+            window.__hriSpeechOutputPrimed = true;
+        };
+        utterance.onend = () => finish(true);
+        utterance.onerror = () => finish(started);
+
+        try {
+            synthesis.speak(utterance);
+        } catch (error) {
+            console.debug("Speech output warm-up could not start:", error);
+            finish(false);
+            return;
+        }
+
+        // Do not hold up the first microphone turn for long. If WebKit has
+        // begun speech, that is enough to unlock the later full-volume reply.
+        timer = window.setTimeout(() => {
+            if (started) {
+                try { synthesis.cancel(); } catch (_) {}
+                finish(true);
+            } else {
+                finish(false);
+            }
+        }, 650);
+    });
+
+    return window.__hriSpeechPrimePromise;
+}
+window.hriPrimeSpeechOutput = primeSpeechOutput;
+/* === V4.4.1_IOS_TTS_PRIME_END === */
+
 function speak(text, face = idleFace, expression = null) {
     if (!text) return;
 

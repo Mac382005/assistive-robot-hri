@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import atexit
+import os
 import random
 import re
+import secrets
 import threading
 from copy import deepcopy
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
-from flask import Flask, Response, jsonify, render_template, request
+from flask import (
+    Flask, Response, jsonify, redirect, render_template, request, session, url_for
+)
 from tzlocal import get_localzone
 
 import config
@@ -22,7 +27,25 @@ from robot import MockHardwareController
 app = Flask(__name__)
 app.config["JSON_SORT_KEYS"] = False
 
-local_timezone = get_localzone()
+# === V4.5_CLOUD_RUNTIME_START ===
+app.secret_key = config.APP_SECRET_KEY or "hri-local-development-session-key"
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=bool(config.CLOUD_MODE),
+    PERMANENT_SESSION_LIFETIME=timedelta(days=config.CLOUD_SESSION_DAYS),
+)
+
+try:
+    local_timezone = (
+        ZoneInfo(config.APP_TIMEZONE)
+        if config.APP_TIMEZONE
+        else get_localzone()
+    )
+except Exception as exc:
+    print(f"[TIMEZONE] Could not load {config.APP_TIMEZONE!r}: {exc}. Falling back to host timezone.")
+    local_timezone = get_localzone()
+# === V4.5_CLOUD_RUNTIME_END ===
 database = RobotDatabase()
 database.initialise()
 database.seed_schedules_if_needed(config.SYNTHETIC_SCHEDULE)
@@ -344,6 +367,119 @@ def upcoming_schedule_context(limit: int = 4) -> list[dict]:
         for item in active[:limit]
     ]
 
+
+# ---------------------------------------------------------------------------
+# V4.5 public cloud access protection + deployment healthcheck
+# ---------------------------------------------------------------------------
+# === V4.5_CLOUD_AUTH_START ===
+
+def _cloud_auth_ready() -> bool:
+    if not config.CLOUD_AUTH_REQUIRED:
+        return True
+    return bool(config.CLOUD_ACCESS_CODE and config.APP_SECRET_KEY)
+
+
+def _safe_next_url(value: object) -> str:
+    candidate = str(value or "/").strip()
+    if not candidate.startswith("/") or candidate.startswith("//"):
+        return "/"
+    return candidate
+
+
+@app.before_request
+def require_cloud_access():
+    if not config.CLOUD_AUTH_REQUIRED:
+        return None
+
+    # These resources must remain reachable before sign-in so Railway can
+    # healthcheck the service and the login page can load its own styles/icon.
+    if (
+        request.path == "/health"
+        or request.path.startswith("/static/")
+        or request.endpoint in {"cloud_login", "cloud_logout"}
+    ):
+        return None
+
+    if not _cloud_auth_ready():
+        if request.path.startswith("/api/"):
+            return jsonify(
+                {
+                    "error": (
+                        "Cloud access protection is not configured. Set "
+                        "CLOUD_ACCESS_CODE and APP_SECRET_KEY on the server."
+                    )
+                }
+            ), 503
+        return redirect(url_for("cloud_login", next=request.full_path))
+
+    if session.get("hri_cloud_authenticated") is True:
+        return None
+
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Authentication required."}), 401
+
+    return redirect(url_for("cloud_login", next=request.full_path))
+
+
+@app.route("/login", methods=["GET", "POST"])
+def cloud_login():
+    if not config.CLOUD_AUTH_REQUIRED:
+        return redirect(url_for("index"))
+
+    next_url = _safe_next_url(request.values.get("next", "/"))
+    setup_incomplete = not _cloud_auth_ready()
+    error = ""
+
+    if request.method == "POST" and not setup_incomplete:
+        supplied = str(request.form.get("access_code") or "")
+        if secrets.compare_digest(supplied, config.CLOUD_ACCESS_CODE):
+            session.clear()
+            session["hri_cloud_authenticated"] = True
+            session.permanent = True
+            return redirect(next_url)
+        error = "That access code is not correct."
+
+    return render_template(
+        "cloud_login.html",
+        app_name=config.APP_NAME,
+        app_version=config.APP_VERSION,
+        next_url=next_url,
+        setup_incomplete=setup_incomplete,
+        error=error,
+    )
+
+
+@app.post("/logout")
+def cloud_logout():
+    session.clear()
+    return redirect(url_for("cloud_login"))
+
+
+@app.get("/health")
+def deployment_health():
+    database_ok = True
+    database_error = None
+    try:
+        database.get_settings()
+    except Exception as exc:
+        database_ok = False
+        database_error = type(exc).__name__
+
+    payload = {
+        "status": "ok" if database_ok else "degraded",
+        "version": config.APP_VERSION,
+        "mode": "cloud" if config.CLOUD_MODE else "local",
+        "database": "ok" if database_ok else "error",
+        "database_error": database_error,
+        "persistent_volume_detected": bool(os.getenv("RAILWAY_VOLUME_MOUNT_PATH")),
+        "auth_required": bool(config.CLOUD_AUTH_REQUIRED),
+        "auth_configured": bool(_cloud_auth_ready()),
+        "scheduler_running": bool(reminder_scheduler.running),
+        "timezone": str(local_timezone),
+    }
+    return jsonify(payload), (200 if database_ok else 503)
+
+# === V4.5_CLOUD_AUTH_END ===
 
 @app.get("/")
 def index():
