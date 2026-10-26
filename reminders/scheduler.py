@@ -3,11 +3,13 @@ from __future__ import annotations
 import threading
 from datetime import datetime, timedelta
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from tzlocal import get_localzone
 
+import config
 from database import RobotDatabase
 
 DAY_CODES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
@@ -25,7 +27,17 @@ class ReminderScheduler:
         self.database = database
         self.on_due = on_due
         self.active_profile_id = active_profile_id or database.get_active_profile_id
-        self.timezone = get_localzone()
+        # V4.5: cloud hosts may run in UTC. Use the same explicit timezone as
+        # app.py so schedule times remain correct after deployment.
+        try:
+            self.timezone = (
+                ZoneInfo(config.APP_TIMEZONE)
+                if config.APP_TIMEZONE
+                else get_localzone()
+            )
+        except Exception as exc:
+            print(f"[SCHEDULER] Invalid timezone {config.APP_TIMEZONE!r}: {exc}. Using host timezone.")
+            self.timezone = get_localzone()
         self.scheduler = BackgroundScheduler(timezone=self.timezone, daemon=True)
         self._lock = threading.RLock()
 
