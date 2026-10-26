@@ -1,0 +1,24 @@
+{
+  "name": "HRI Socially Assistive Robot",
+  "short_name": "HRI Robot",
+  "id": "/",
+  "start_url": "/?robot=1",
+  "scope": "/",
+  "display": "fullscreen",
+  "display_override": ["fullscreen", "standalone"],
+  "background_color": "#eaf7ff",
+  "theme_color": "#dff4ff",
+  "orientation": "landscape",
+  "icons": [
+    {
+      "src": "/static/img/robot-app-icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/static/img/robot-app-icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

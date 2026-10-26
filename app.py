@@ -12,6 +12,7 @@ from tzlocal import get_localzone
 
 import config
 from companion import AICompanion
+from companion.audio_transcriber import AudioTranscriber
 from database import RobotDatabase
 from experiment.conditions import CONDITIONS, get_condition
 from experiment.response_timer import ResponseTimer
@@ -28,6 +29,7 @@ database.seed_schedules_if_needed(config.SYNTHETIC_SCHEDULE)
 response_timer = ResponseTimer()
 hardware = MockHardwareController()
 companion_ai = AICompanion()
+audio_transcriber = AudioTranscriber()
 state_lock = threading.RLock()
 
 robot_state = {
@@ -1005,6 +1007,74 @@ def chat():
     )
 
 
+@app.post("/api/voice/chat")
+def voice_chat():
+    """Transcribe a short tablet recording, then run the normal companion turn."""
+    if not audio_transcriber.api_available:
+        return jsonify(
+            {
+                "error": (
+                    "Tablet voice transcription needs Gemini and an internet connection. "
+                    "Check GEMINI_API_KEY / AI_ENABLED, then try again."
+                )
+            }
+        ), 503
+
+    upload = request.files.get("audio")
+    if upload is None:
+        return jsonify({"error": "No audio recording was uploaded."}), 400
+
+    max_bytes = int(config.TABLET_AUDIO_MAX_BYTES)
+    if request.content_length and request.content_length > max_bytes + 1_000_000:
+        return jsonify({"error": "The voice recording is too large."}), 413
+
+    audio_bytes = upload.stream.read(max_bytes + 1)
+    if len(audio_bytes) > max_bytes:
+        return jsonify({"error": "The voice recording is too large."}), 413
+    if not audio_bytes:
+        return jsonify({"error": "The voice recording was empty."}), 400
+
+    mime_type = clean_text(
+        request.form.get("mime_type"),
+        fallback=upload.mimetype or "audio/webm",
+        max_length=80,
+    )
+
+    try:
+        transcript = audio_transcriber.transcribe(audio_bytes, mime_type)
+    except (ValueError, RuntimeError) as exc:
+        return jsonify({"error": str(exc)}), 502
+
+    message = clean_text(transcript, max_length=600)
+    if not message:
+        return jsonify({"error": "No speech was detected in that recording."}), 422
+
+    active_profile = profile()
+    history = database.chat_history(
+        active_profile["id"],
+        limit=config.AI_MAX_HISTORY_MESSAGES,
+    )
+    reply = companion_ai.reply(
+        profile=active_profile,
+        message=message,
+        history=history,
+        schedule_context=upcoming_schedule_context(limit=4),
+    )
+    database.add_chat_message(active_profile["id"], "user", message)
+    database.add_chat_message(active_profile["id"], "assistant", reply.text)
+
+    return jsonify(
+        {
+            **reply.to_dict(),
+            "transcript": message,
+            "profile_id": active_profile["id"],
+            "profile_name": active_profile["display_name"],
+            "ai_status": companion_ai.status(),
+            "transcription_status": audio_transcriber.status(),
+        }
+    )
+
+
 # ---------------------------------------------------------------------------
 # Trials + hardware
 # ---------------------------------------------------------------------------
@@ -1044,9 +1114,14 @@ def test_hardware():
 
 if __name__ == "__main__":
     reminder_scheduler.start()
+    ssl_context = None
+    scheme = "http"
+    if config.SSL_CERT_PATH and config.SSL_KEY_PATH:
+        ssl_context = (config.SSL_CERT_PATH, config.SSL_KEY_PATH)
+        scheme = "https"
     ai_status_line = companion_ai.status()
     print(f"\n{config.APP_NAME} v{config.APP_VERSION}")
-    print(f"Open http://{config.HOST}:{config.PORT} in your browser")
+    print(f"Open {scheme}://{config.HOST}:{config.PORT} in your browser")
     print(f"Hardware mode: {hardware.mode}")
     print(f"Scheduler: {'RUNNING' if reminder_scheduler.running else 'STOPPED'}")
     print(f"Active profile: {profile()['display_name'] or profile()['participant_id']}")
@@ -1069,4 +1144,5 @@ if __name__ == "__main__":
         port=config.PORT,
         debug=config.DEBUG,
         use_reloader=False,
+        ssl_context=ssl_context,
     )

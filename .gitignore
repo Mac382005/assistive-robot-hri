@@ -38,3 +38,6 @@ data/*.db-wal
 data/*.db-shm
 data/*.db-journal
 *.pyc
+
+# V4.3 local HTTPS certificates/private keys
+certs/

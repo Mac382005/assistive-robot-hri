@@ -1,12 +1,14 @@
 /*
- * HRI Socially Assistive Robot V4.1
- * Voice-first, face-first interaction layer.
+ * HRI Socially Assistive Robot V4.3.2
+ * Voice-first, face-first interaction layer with tablet audio capture.
  *
- * V4.1 changes:
- * - explicit two-tap conversation capture: tap once to start, tap again to finish
- * - no automatic response on a short pause
- * - conversation history is visible in the full-screen Control Centre
- * - selectable browser/system TTS voice with a saved preference
+ * Input modes:
+ * - Browser SpeechRecognition on supported desktop browsers.
+ * - MediaRecorder + Gemini server-side transcription on tablets / unsupported browsers.
+ *
+ * Conversation is explicit two-tap:
+ *   tap once -> listen/record
+ *   tap again -> finish the full turn and send
  */
 
 (() => {
@@ -20,6 +22,7 @@
     let recognition = null;
     let recognitionActive = false;
     let voiceSessionActive = false;
+    let voiceInputMode = null; // "recognition" | "recording"
     let isThinking = false;
     let submitAfterRecognitionEnds = false;
     let fatalRecognitionError = false;
@@ -28,8 +31,54 @@
     let sessionFinalParts = [];
     let sessionInterim = "";
 
+    let mediaStream = null;
+    let mediaRecorder = null;
+    let mediaChunks = [];
+    let recordingMimeType = "";
+    let recordingStartedAt = 0;
+
     function el(id) {
         return document.getElementById(id);
+    }
+
+    function isIOSLike() {
+        const ua = navigator.userAgent || "";
+        return /iPad|iPhone|iPod/i.test(ua) ||
+            (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+    }
+
+    function isAndroidLike() {
+        return /Android/i.test(navigator.userAgent || "");
+    }
+
+    function recorderSupported() {
+        return Boolean(
+            window.isSecureContext &&
+            navigator.mediaDevices?.getUserMedia &&
+            window.MediaRecorder
+        );
+    }
+
+    function setTabletAudioSession(type) {
+        try {
+            if (navigator.audioSession && "type" in navigator.audioSession) {
+                navigator.audioSession.type = type;
+                console.debug("[V4.3.2] audioSession ->", type);
+            }
+        } catch (error) {
+            console.debug("Audio session change unavailable:", error);
+        }
+    }
+
+    function preferredInputMode() {
+        // Tablets use MediaRecorder because browser SpeechRecognition is
+        // inconsistent on iPadOS and varies across Android browsers.
+        if (recorderSupported() && (isIOSLike() || isAndroidLike() || !SpeechRecognitionClass)) {
+            return "recording";
+        }
+        if (SpeechRecognitionClass) return "recognition";
+        if (recorderSupported()) return "recording";
+        return null;
     }
 
     function setVoiceStatus(message, state = "idle") {
@@ -38,7 +87,7 @@
         if (status) status.textContent = message;
         if (dock) {
             dock.dataset.state = state;
-            dock.classList.toggle("busy", state === "thinking" || state === "speaking");
+            dock.classList.toggle("busy", state === "thinking" || state === "speaking" || state === "transcribing");
         }
         updateMicButton(state);
     }
@@ -48,7 +97,7 @@
         const icon = button?.querySelector(".v4-mic-icon");
         if (!button || !icon) return;
 
-        if (voiceSessionActive || state === "listening") {
+        if (voiceSessionActive || state === "listening" || state === "recording") {
             icon.textContent = "✓";
             button.setAttribute("aria-label", "Finish speaking and send to the robot");
             button.title = "Finish speaking";
@@ -67,9 +116,17 @@
     }
 
     function idlePrompt() {
-        return SpeechRecognitionClass
-            ? "Tap my face or the microphone to start talking."
-            : "Voice input needs a supported Chrome or Edge browser.";
+        const mode = preferredInputMode();
+        if (mode === "recording") {
+            return "Tap my face or microphone to talk.";
+        }
+        if (mode === "recognition") {
+            return "Tap my face or microphone to start talking.";
+        }
+        if (!window.isSecureContext && (isIOSLike() || isAndroidLike())) {
+            return "Voice needs the secure HTTPS tablet connection.";
+        }
+        return "Voice input is unavailable in this browser.";
     }
 
     function listeningPrompt() {
@@ -104,6 +161,47 @@
         }
     }
 
+    function releaseMediaStream() {
+        if (mediaStream) {
+            mediaStream.getTracks().forEach((track) => track.stop());
+        }
+        mediaStream = null;
+
+        // iPad Safari can leave the audio route in a recording-oriented state
+        // after getUserMedia(). Put it back into playback before the robot talks.
+        if (isIOSLike()) {
+            setTabletAudioSession("playback");
+            window.__hriLastMicReleaseAt = Date.now();
+            window.setTimeout(() => {
+                try { window.speechSynthesis?.resume?.(); } catch (_) {}
+            }, 80);
+        }
+    }
+
+    function stopRecording(abort = false) {
+        if (!mediaRecorder) {
+            releaseMediaStream();
+            return;
+        }
+        try {
+            if (mediaRecorder.state !== "inactive") {
+                if (abort) {
+                    mediaRecorder.onstop = null;
+                    mediaRecorder.stop();
+                } else {
+                    mediaRecorder.stop();
+                }
+            }
+        } catch (error) {
+            console.debug("MediaRecorder stop ignored:", error);
+        }
+        if (abort) {
+            mediaRecorder = null;
+            mediaChunks = [];
+            releaseMediaStream();
+        }
+    }
+
     function cancelVoiceSession() {
         clearTimers();
         voiceSessionActive = false;
@@ -113,6 +211,8 @@
         sessionInterim = "";
         stopRecognition(true);
         recognitionActive = false;
+        stopRecording(true);
+        voiceInputMode = null;
         setListeningVisual(false);
         setTranscript("");
         if (!isThinking) setVoiceStatus(idlePrompt(), "idle");
@@ -148,6 +248,39 @@
         setTranscript(text ? `You: ${text}` : "");
     }
 
+    function handleRobotReply(data, transcriptText = "") {
+        if (transcriptText) {
+            setTranscript(`You: ${transcriptText}`);
+        } else {
+            setTranscript("");
+        }
+
+        if (typeof setIdleSpeech === "function") setIdleSpeech(data.text);
+        if (typeof setFaceExpression === "function" && el("robot-face")) {
+            setFaceExpression(el("robot-face"), data.expression || "happy");
+        }
+        if (typeof popEmoji === "function") popEmoji(data.emoji || "💬");
+
+        setVoiceStatus("Speaking", "speaking");
+        if (isIOSLike()) {
+            setTabletAudioSession("playback");
+        }
+        if (typeof speak === "function") {
+            speak(data.text, el("robot-face"), data.expression || "happy");
+        }
+
+        loadConversationHistory(false);
+
+        const words = String(data.text || "").trim().split(/\s+/).filter(Boolean).length;
+        const estimatedSpeechMs = Math.max(1800, Math.min(12000, words * 430));
+        window.setTimeout(() => {
+            if (!voiceSessionActive && !isThinking) {
+                setTranscript("");
+                setVoiceStatus(idlePrompt(), "idle");
+            }
+        }, estimatedSpeechMs);
+    }
+
     async function sendVoiceMessage(message) {
         const cleaned = String(message || "").trim();
         if (!cleaned || isThinking) return;
@@ -159,9 +292,7 @@
         setTranscript(`You: ${cleaned}`);
         setVoiceStatus("Thinking…", "thinking");
 
-        if (typeof setIdleSpeech === "function") {
-            setIdleSpeech("…");
-        }
+        if (typeof setIdleSpeech === "function") setIdleSpeech("…");
         if (typeof setFaceExpression === "function" && el("robot-face")) {
             setFaceExpression(el("robot-face"), "attentive");
         }
@@ -171,30 +302,7 @@
                 method: "POST",
                 body: JSON.stringify({ message: cleaned }),
             });
-
-            setTranscript("");
-            if (typeof setIdleSpeech === "function") setIdleSpeech(data.text);
-            if (typeof setFaceExpression === "function" && el("robot-face")) {
-                setFaceExpression(el("robot-face"), data.expression || "happy");
-            }
-            if (typeof popEmoji === "function") popEmoji(data.emoji || "💬");
-
-            setVoiceStatus("Speaking", "speaking");
-            if (typeof speak === "function") {
-                speak(data.text, el("robot-face"), data.expression || "happy");
-            }
-
-            // Keep the Control Centre history current even though the user-facing
-            // typed chat has been removed.
-            loadConversationHistory(false);
-
-            const words = String(data.text || "").trim().split(/\s+/).filter(Boolean).length;
-            const estimatedSpeechMs = Math.max(1800, Math.min(12000, words * 430));
-            window.setTimeout(() => {
-                if (!voiceSessionActive && !isThinking) {
-                    setVoiceStatus(idlePrompt(), "idle");
-                }
-            }, estimatedSpeechMs);
+            handleRobotReply(data, cleaned);
         } catch (error) {
             console.error("Voice companion request failed:", error);
             if (typeof setIdleSpeech === "function") {
@@ -206,7 +314,62 @@
         }
     }
 
-    function finaliseVoiceSession() {
+    async function sendRecordedAudio(blob, mimeType) {
+        if (!blob || blob.size === 0 || isThinking) {
+            showVoiceError("I didn’t hear any audio. Tap and try again.");
+            return;
+        }
+
+        isThinking = true;
+        voiceSessionActive = false;
+        setListeningVisual(false);
+        setTranscript("");
+        setVoiceStatus("Understanding you…", "transcribing");
+        if (typeof setIdleSpeech === "function") setIdleSpeech("…");
+
+        try {
+            const form = new FormData();
+            const ext = mimeType.includes("mp4") ? "m4a" :
+                mimeType.includes("ogg") ? "ogg" :
+                mimeType.includes("wav") ? "wav" : "webm";
+            form.append("audio", blob, `robot-turn.${ext}`);
+            form.append("mime_type", mimeType || blob.type || "audio/webm");
+
+            const response = await fetch("/api/voice/chat", {
+                method: "POST",
+                body: form,
+            });
+
+            let data = {};
+            try {
+                data = await response.json();
+            } catch (_) {
+                data = {};
+            }
+
+            if (!response.ok) {
+                throw new Error(data.error || `Voice request failed (${response.status}).`);
+            }
+
+            const transcript = String(data.transcript || "").trim();
+            if (!transcript) throw new Error("No speech was detected in that recording.");
+
+            handleRobotReply(data, transcript);
+        } catch (error) {
+            console.error("Recorded voice request failed:", error);
+            if (typeof setIdleSpeech === "function") {
+                setIdleSpeech("Sorry, I could not understand that just now.");
+            }
+            showVoiceError(error.message || "I could not understand that just now.");
+        } finally {
+            isThinking = false;
+            mediaChunks = [];
+            mediaRecorder = null;
+            releaseMediaStream();
+        }
+    }
+
+    function finaliseRecognitionSession() {
         if (!submitAfterRecognitionEnds) return;
 
         clearTimers();
@@ -234,13 +397,12 @@
         try {
             recognition.start();
         } catch (error) {
-            console.debug("Recognition start retry:", error);
             restartTimer = window.setTimeout(() => {
                 restartTimer = null;
                 if (voiceSessionActive && !recognitionActive && !isThinking && !fatalRecognitionError) {
                     try {
                         recognition.start();
-                    } catch (retryError) {
+                    } catch (_) {
                         showVoiceError("The microphone is still busy. Please try again.");
                         voiceSessionActive = false;
                         setListeningVisual(false);
@@ -250,75 +412,10 @@
         }
     }
 
-    function startVoiceSession() {
-        if (!SpeechRecognitionClass || !recognition) {
-            showVoiceError("Voice recognition is unavailable in this browser.");
-            return;
-        }
-        if (isThinking) return;
-        if (!el("idle-screen")?.classList.contains("active")) return;
-        if (el("developer-panel")?.classList.contains("open")) return;
-
-        stopRobotSpeech();
-        clearTimers();
-        fatalRecognitionError = false;
-        submitAfterRecognitionEnds = false;
-        sessionFinalParts = [];
-        sessionInterim = "";
-        voiceSessionActive = true;
-
-        setTranscript("");
-        setListeningVisual(true);
-        setVoiceStatus(listeningPrompt(), "listening");
-        if (typeof setIdleSpeech === "function") {
-            setIdleSpeech("I’m listening.");
-        }
-
-        startRecognitionEngine();
-    }
-
-    function finishVoiceSession() {
-        if (!voiceSessionActive || isThinking) return;
-
-        voiceSessionActive = false;
-        submitAfterRecognitionEnds = true;
-        setVoiceStatus("Got it — finishing your sentence…", "finishing");
-
-        // Stop asks Chromium to emit its last final recognition result before
-        // onend. We submit only after onend so the final words are not cut off.
-        stopRecognition(false);
-
-        if (!recognitionActive) {
-            window.setTimeout(finaliseVoiceSession, 80);
-            return;
-        }
-
-        // Defensive fallback for browsers that fail to fire onend promptly.
-        finishFallbackTimer = window.setTimeout(() => {
-            finaliseVoiceSession();
-        }, 1200);
-    }
-
-    function toggleVoiceSession() {
-        if (voiceSessionActive) finishVoiceSession();
-        else startVoiceSession();
-    }
-
     function configureRecognition() {
-        const micButton = el("v4-mic-button");
-
-        if (!SpeechRecognitionClass) {
-            if (micButton) {
-                micButton.disabled = true;
-                micButton.setAttribute("aria-label", "Voice recognition is unavailable in this browser");
-            }
-            setVoiceStatus(idlePrompt(), "unsupported");
-            return;
-        }
+        if (!SpeechRecognitionClass) return;
 
         recognition = new SpeechRecognitionClass();
-        // Continuous mode plus auto-restart lets the person pause naturally.
-        // Crucially, results are NEVER sent until the second tap.
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.maxAlternatives = 1;
@@ -328,7 +425,7 @@
 
         recognition.onstart = () => {
             recognitionActive = true;
-            if (voiceSessionActive) {
+            if (voiceSessionActive && voiceInputMode === "recognition") {
                 setListeningVisual(true);
                 setVoiceStatus(listeningPrompt(), "listening");
             }
@@ -343,11 +440,8 @@
                 const text = String(result[0]?.transcript || "").trim();
                 if (!text) continue;
 
-                if (result.isFinal) {
-                    newFinalText += `${newFinalText ? " " : ""}${text}`;
-                } else {
-                    latestInterim = text;
-                }
+                if (result.isFinal) newFinalText += `${newFinalText ? " " : ""}${text}`;
+                else latestInterim = text;
             }
 
             if (newFinalText) sessionFinalParts.push(newFinalText);
@@ -360,15 +454,10 @@
             const code = event.error || "unknown";
 
             if (code === "aborted") return;
-
             if (code === "no-speech") {
-                // A pause is no longer treated as the end of the user's turn.
-                if (voiceSessionActive) {
-                    setVoiceStatus(listeningPrompt(), "listening");
-                }
+                if (voiceSessionActive) setVoiceStatus(listeningPrompt(), "listening");
                 return;
             }
-
             if (code === "not-allowed" || code === "service-not-allowed") {
                 fatalRecognitionError = true;
                 voiceSessionActive = false;
@@ -377,13 +466,12 @@
                 showVoiceError("Microphone permission is blocked. Allow microphone access, then try again.");
                 return;
             }
-
-            if (code === "network") {
-                fatalRecognitionError = true;
+            if (code === "network" && recorderSupported()) {
+                // Next tap can transparently use the server-side recorder path.
+                recognition = null;
                 voiceSessionActive = false;
-                submitAfterRecognitionEnds = false;
                 setListeningVisual(false);
-                showVoiceError("Voice recognition could not reach its speech service.");
+                showVoiceError("Browser speech recognition failed. Tap again to use tablet recording.");
                 return;
             }
 
@@ -396,28 +484,197 @@
 
         recognition.onend = () => {
             recognitionActive = false;
-
             if (submitAfterRecognitionEnds) {
-                finaliseVoiceSession();
+                finaliseRecognitionSession();
                 return;
             }
-
-            if (voiceSessionActive && !isThinking && !fatalRecognitionError) {
-                // Some Chromium builds end a recognition chunk after silence even
-                // with continuous=true. Restart while the explicit session remains
-                // open so a thinking pause does not make the robot answer early.
+            if (voiceSessionActive && voiceInputMode === "recognition" && !isThinking && !fatalRecognitionError) {
                 restartTimer = window.setTimeout(() => {
                     restartTimer = null;
                     startRecognitionEngine();
                 }, 180);
                 return;
             }
-
             if (!isThinking && !voiceSessionActive) {
                 setListeningVisual(false);
                 setVoiceStatus(idlePrompt(), "idle");
             }
         };
+    }
+
+    function chooseRecordingMimeType() {
+        if (!window.MediaRecorder) return "";
+        const candidates = [
+            "audio/mp4",
+            "audio/webm;codecs=opus",
+            "audio/webm",
+            "audio/ogg;codecs=opus",
+        ];
+        return candidates.find((type) => {
+            try {
+                return MediaRecorder.isTypeSupported(type);
+            } catch (_) {
+                return false;
+            }
+        }) || "";
+    }
+
+    async function startRecordingSession() {
+        if (!recorderSupported()) {
+            if (!window.isSecureContext) {
+                showVoiceError("Tablet microphone access needs HTTPS. Open the secure robot address.");
+            } else {
+                showVoiceError("Audio recording is unavailable in this browser.");
+            }
+            return;
+        }
+
+        try {
+            if (isIOSLike()) {
+                // Tell WebKit explicitly that this phase is microphone capture.
+                // releaseMediaStream() switches it back to playback afterwards.
+                setTabletAudioSession("play-and-record");
+            }
+
+            mediaStream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                },
+                video: false,
+            });
+
+            recordingMimeType = chooseRecordingMimeType();
+            mediaChunks = [];
+            mediaRecorder = recordingMimeType
+                ? new MediaRecorder(mediaStream, { mimeType: recordingMimeType })
+                : new MediaRecorder(mediaStream);
+            recordingMimeType = mediaRecorder.mimeType || recordingMimeType || "audio/webm";
+
+            mediaRecorder.ondataavailable = (event) => {
+                if (event.data && event.data.size > 0) mediaChunks.push(event.data);
+            };
+
+            mediaRecorder.onerror = (event) => {
+                console.error("MediaRecorder error:", event.error || event);
+                voiceSessionActive = false;
+                setListeningVisual(false);
+                releaseMediaStream();
+                showVoiceError("The tablet could not record audio. Check microphone permission.");
+            };
+
+            mediaRecorder.onstop = () => {
+                const blob = new Blob(mediaChunks, { type: recordingMimeType || "audio/webm" });
+                const finalMimeType = blob.type || recordingMimeType || "audio/webm";
+                const durationMs = recordingStartedAt ? Date.now() - recordingStartedAt : 0;
+                console.info("[V4.3.2] Recorded tablet audio", {
+                    bytes: blob.size,
+                    mimeType: finalMimeType,
+                    durationMs,
+                });
+                mediaChunks = [];
+                recordingStartedAt = 0;
+                releaseMediaStream();
+
+                if (blob.size < 1024) {
+                    showVoiceError("The tablet recording was too small. Please tap, speak, then tap again.");
+                    return;
+                }
+                sendRecordedAudio(blob, finalMimeType);
+            };
+
+            // Safari/iPad can produce broken or incomplete MP4 fragments with
+            // short MediaRecorder timeslices. For a conversational turn we do not
+            // need streaming chunks, so record one complete file and let stop()
+            // emit the final dataavailable event. This is also fine on Android.
+            recordingStartedAt = Date.now();
+            mediaRecorder.start();
+            setListeningVisual(true);
+            setVoiceStatus(listeningPrompt(), "recording");
+            if (typeof setIdleSpeech === "function") setIdleSpeech("I’m listening.");
+        } catch (error) {
+            voiceSessionActive = false;
+            voiceInputMode = null;
+            releaseMediaStream();
+            setListeningVisual(false);
+            if (error?.name === "NotAllowedError" || error?.name === "SecurityError") {
+                showVoiceError("Microphone permission is blocked. Allow microphone access for this robot site.");
+            } else {
+                showVoiceError(error?.message || "The tablet microphone could not start.");
+            }
+        }
+    }
+
+    function startVoiceSession() {
+        if (isThinking) return;
+        if (!el("idle-screen")?.classList.contains("active")) return;
+        if (el("developer-panel")?.classList.contains("open")) return;
+
+        stopRobotSpeech();
+        clearTimers();
+        fatalRecognitionError = false;
+        submitAfterRecognitionEnds = false;
+        sessionFinalParts = [];
+        sessionInterim = "";
+        voiceSessionActive = true;
+        setTranscript("");
+
+        voiceInputMode = preferredInputMode();
+        if (voiceInputMode === "recording") {
+            startRecordingSession();
+            return;
+        }
+        if (voiceInputMode === "recognition") {
+            setListeningVisual(true);
+            setVoiceStatus(listeningPrompt(), "listening");
+            if (typeof setIdleSpeech === "function") setIdleSpeech("I’m listening.");
+            startRecognitionEngine();
+            return;
+        }
+
+        voiceSessionActive = false;
+        if (!window.isSecureContext && (isIOSLike() || isAndroidLike())) {
+            showVoiceError("Voice needs HTTPS on this tablet. Use the secure robot address.");
+        } else {
+            showVoiceError("Voice input is unavailable in this browser.");
+        }
+    }
+
+    function finishVoiceSession() {
+        if (!voiceSessionActive || isThinking) return;
+
+        if (voiceInputMode === "recording") {
+            voiceSessionActive = false;
+            setVoiceStatus("Got it — processing your sentence…", "finishing");
+            setListeningVisual(false);
+            if (mediaRecorder && mediaRecorder.state !== "inactive") {
+                mediaRecorder.stop();
+            } else {
+                releaseMediaStream();
+                showVoiceError("The recording ended unexpectedly. Please try again.");
+            }
+            return;
+        }
+
+        voiceSessionActive = false;
+        submitAfterRecognitionEnds = true;
+        setVoiceStatus("Got it — finishing your sentence…", "finishing");
+        stopRecognition(false);
+
+        if (!recognitionActive) {
+            window.setTimeout(finaliseRecognitionSession, 80);
+            return;
+        }
+
+        finishFallbackTimer = window.setTimeout(() => {
+            finaliseRecognitionSession();
+        }, 1200);
+    }
+
+    function toggleVoiceSession() {
+        if (voiceSessionActive) finishVoiceSession();
+        else startVoiceSession();
     }
 
     function formatHistoryTime(value) {
@@ -527,7 +784,7 @@
         }
 
         if (note) {
-            note.textContent = "Natural/online voices are preferred when your browser exposes them. Your choice is saved on this device.";
+            note.textContent = "The voice comes from this device/browser. Your choice is saved on this device.";
         }
     }
 
@@ -536,17 +793,10 @@
         if (!select?.value) return;
         try {
             window.localStorage.setItem(VOICE_STORAGE_KEY, select.value);
-        } catch (_) {
-            // localStorage can be blocked in strict browser modes; the voice still
-            // works for the current session through refreshPreferredSpeechVoice.
-        }
+        } catch (_) {}
 
-        if (typeof refreshPreferredSpeechVoice === "function") {
-            refreshPreferredSpeechVoice();
-        }
-        if (typeof showToast === "function") {
-            showToast(`Robot voice set to ${select.value}.`);
-        }
+        if (typeof refreshPreferredSpeechVoice === "function") refreshPreferredSpeechVoice();
+        if (typeof showToast === "function") showToast(`Robot voice set to ${select.value}.`);
     }
 
     function testSelectedVoice() {
@@ -577,7 +827,7 @@
             <div class="section-heading-row">
                 <div>
                     <h3>Robot voice</h3>
-                    <p class="panel-note">Choose a voice installed or exposed by this browser. Natural voices are shown first when available.</p>
+                    <p class="panel-note">Choose a text-to-speech voice exposed by this device/browser.</p>
                 </div>
             </div>
             <div class="v4-voice-settings-row">
@@ -625,8 +875,6 @@
             window.speechSynthesis.addEventListener("voiceschanged", populateVoiceSelector);
         }
 
-        // V3 owns profile switching. Refresh this V4-only history once the
-        // selected active profile has changed on the server.
         el("v3-profile-select")?.addEventListener("change", () => {
             window.setTimeout(() => loadConversationHistory(false), 650);
         });
@@ -670,9 +918,7 @@
             developerClose.setAttribute("aria-label", "Close control centre and return to robot face");
         }
 
-        if (typeof setIdleSpeech === "function") {
-            setIdleSpeech("Tap my face and talk to me.");
-        }
+        if (typeof setIdleSpeech === "function") setIdleSpeech("Tap my face and talk to me.");
 
         configureRecognition();
 
@@ -722,8 +968,6 @@
     }
 
     function hideLegacyChatUI() {
-        // The legacy typed-chat DOM remains because the V3 profile code still
-        // references it, but V4 hides it from the participant-facing interface.
         document.body.classList.add("v4-chat-replaced-by-voice");
     }
 
@@ -733,8 +977,6 @@
         installControlCentreExtras();
     }
 
-    // v3.js creates profile/chat elements after a short timeout. Waiting a little
-    // longer lets V4.1 attach the Control Centre history and voice selector safely.
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", () => {
             window.setTimeout(initialiseV4, 700);

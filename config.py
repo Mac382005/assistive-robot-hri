@@ -16,10 +16,18 @@ DATABASE_PATH = DATA_DIR / "robot.db"
 load_dotenv(BASE_DIR / ".env")
 
 APP_NAME = "HRI Socially Assistive Robot"
-APP_VERSION = "4.2"
-HOST = "127.0.0.1"
+APP_VERSION = "4.4"
+HOST = os.getenv("HOST", "127.0.0.1").strip() or "127.0.0.1"
 PORT = 5000
 DEBUG = True
+
+# V4.3 tablet/base networking. The normal desktop default remains localhost.
+SSL_CERT_PATH = os.getenv("SSL_CERT_PATH", "").strip()
+SSL_KEY_PATH = os.getenv("SSL_KEY_PATH", "").strip()
+TABLET_AUDIO_MAX_BYTES = max(
+    1_000_000,
+    min(int(os.getenv("TABLET_AUDIO_MAX_BYTES", str(8 * 1024 * 1024))), 20_000_000),
+)
 
 DEFAULT_PARTICIPANT_ID = "P001"
 DEFAULT_DISPLAY_NAME = ""
@@ -69,6 +77,14 @@ GEMINI_MODEL = (
         "gemini-3.5-flash-lite"
     ).strip()
     or "gemini-3.5-flash-lite"
+)
+
+GEMINI_TRANSCRIBE_MODEL = (
+    os.getenv(
+        "GEMINI_TRANSCRIBE_MODEL",
+        "gemini-3.5-transcribe",
+    ).strip()
+    or "gemini-3.5-transcribe"
 )
 
 # Kept for compatibility with the old V3 configuration.
