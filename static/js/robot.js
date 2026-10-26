@@ -298,93 +298,134 @@ function beep() {
 function speak(text, face = idleFace, expression = null) {
     if (!text) return;
 
-    /*
-        Speech remains browser-based for V2.
-        V3 can replace this with voice recognition / improved TTS.
-
-        While speech is active:
-            open cute eyes
-                 ↓
-            close curved eyes
-                 ↓
-            open again
-
-        This gives the robot a more expressive conversational face.
-    */
+    const finishVisual = () => {
+        stopTalkingEyes(face);
+        face?.classList.remove("talking");
+        if (face === idleFace) {
+            window.setTimeout(() => setFaceExpression(idleFace, "happy"), 350);
+        }
+    };
 
     if (!("speechSynthesis" in window)) {
         if (face) {
-            if (expression) {
-                setFaceExpression(face, expression);
-            }
-
+            if (expression) setFaceExpression(face, expression);
             face.classList.add("talking");
             startTalkingEyes(face);
         }
-
-        window.setTimeout(() => {
-            stopTalkingEyes(face);
-            face?.classList.remove("talking");
-
-            if (face === idleFace) {
-                setFaceExpression(idleFace, "happy");
-            }
-        }, 1500);
-
+        window.setTimeout(finishVisual, 1500);
         return;
     }
 
-    window.speechSynthesis.cancel();
+    const synthesis = window.speechSynthesis;
+    const ua = navigator.userAgent || "";
+    const isIOS = /iPad|iPhone|iPod/i.test(ua) ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 
-    const utterance = new SpeechSynthesisUtterance(text);
-
-    refreshPreferredSpeechVoice();
-
-    if (preferredSpeechVoice) {
-        utterance.voice = preferredSpeechVoice;
-        utterance.lang =
-            preferredSpeechVoice.lang || "en-AU";
-    } else {
-        utterance.lang = "en-AU";
+    // iPad Safari can leave its audio route in the record category after
+    // getUserMedia(). Explicitly restore playback before TTS.
+    if (isIOS) {
+        try {
+            if (navigator.audioSession && "type" in navigator.audioSession) {
+                navigator.audioSession.type = "playback";
+            }
+        } catch (error) {
+            console.debug("Could not switch iPad audio session to playback:", error);
+        }
     }
 
-    utterance.rate = 0.94;
-    utterance.pitch = 1.05;
-    utterance.volume = 1.0;
+    synthesis.cancel();
+    try { synthesis.resume(); } catch (_) {}
 
-    utterance.onstart = () => {
-        if (expression) {
-            setFaceExpression(face, expression);
+    const speakAttempt = (attempt = 1) => {
+        let started = false;
+        let completed = false;
+        let retryScheduled = false;
+        let watchdog = null;
+
+        const utterance = new SpeechSynthesisUtterance(text);
+        // Keep a strong reference. Some mobile Safari builds have historically
+        // been unreliable when the utterance is only a local variable.
+        window.__hriActiveSpeechUtterance = utterance;
+
+        refreshPreferredSpeechVoice();
+
+        // First attempt uses the selected voice. If Safari silently stalls,
+        // retry once using the system default English voice.
+        if (preferredSpeechVoice && !(isIOS && attempt > 1)) {
+            utterance.voice = preferredSpeechVoice;
+            utterance.lang = preferredSpeechVoice.lang || "en-AU";
+        } else {
+            utterance.lang = /^en/i.test(navigator.language || "")
+                ? navigator.language
+                : "en-AU";
         }
 
-        face?.classList.add("talking");
+        utterance.rate = isIOS ? 0.92 : 0.94;
+        utterance.pitch = isIOS ? 1.02 : 1.05;
+        utterance.volume = 1.0;
 
-        startTalkingEyes(face);
-    };
-
-    utterance.onend = () => {
-        stopTalkingEyes(face);
-
-        face?.classList.remove("talking");
-
-        if (face === idleFace) {
+        const scheduleRetry = (reason) => {
+            if (completed || retryScheduled || attempt >= 2) {
+                if (!completed) finishVisual();
+                return;
+            }
+            retryScheduled = true;
+            if (watchdog) window.clearTimeout(watchdog);
+            console.warn("HRI speech retry:", reason);
+            try { synthesis.cancel(); } catch (_) {}
             window.setTimeout(() => {
-                setFaceExpression(idleFace, "happy");
-            }, 350);
+                try { synthesis.resume(); } catch (_) {}
+                speakAttempt(attempt + 1);
+            }, isIOS ? 220 : 120);
+        };
+
+        utterance.onstart = () => {
+            started = true;
+            if (watchdog) window.clearTimeout(watchdog);
+            if (expression) setFaceExpression(face, expression);
+            face?.classList.add("talking");
+            startTalkingEyes(face);
+        };
+
+        utterance.onend = () => {
+            completed = true;
+            if (watchdog) window.clearTimeout(watchdog);
+            finishVisual();
+            window.__hriActiveSpeechUtterance = null;
+        };
+
+        utterance.onerror = (event) => {
+            if (watchdog) window.clearTimeout(watchdog);
+            const reason = event?.error || "speech synthesis error";
+            if (!started && attempt < 2) {
+                scheduleRetry(reason);
+                return;
+            }
+            completed = true;
+            console.warn("Speech synthesis failed:", reason);
+            finishVisual();
+            window.__hriActiveSpeechUtterance = null;
+        };
+
+        try {
+            synthesis.speak(utterance);
+        } catch (error) {
+            scheduleRetry(error?.message || "speak() threw");
+            return;
         }
+
+        watchdog = window.setTimeout(() => {
+            if (!started && !completed) {
+                scheduleRetry("speech did not start");
+            }
+        }, isIOS ? 1300 : 2000);
     };
 
-    utterance.onerror = () => {
-        stopTalkingEyes(face);
-
-        face?.classList.remove("talking");
-
-        if (face === idleFace) {
-            setFaceExpression(idleFace, "happy");
-        }
-    };
-
-    window.speechSynthesis.speak(utterance);
+    // Give WebKit a short moment to move from record routing back to playback.
+    const lastRelease = Number(window.__hriLastMicReleaseAt || 0);
+    const age = lastRelease ? Date.now() - lastRelease : 9999;
+    const delay = isIOS ? Math.max(180, 550 - age) : 0;
+    window.setTimeout(() => speakAttempt(1), delay);
 }
 
 function startIdleAnimations() {
